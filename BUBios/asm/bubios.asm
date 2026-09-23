@@ -1,6 +1,6 @@
 ; =====================================================================
 ;  BUBios -- MR-BIOS-style front end for the AMIBIOS 11/11/92 setup
-;  (SOYO SY-019L1, OPTi 82C495SLC, 27C512) -- trial version 0.1
+;  (SOYO SY-019L1, OPTi 82C495SLC, 27C512) -- version 1.0
 ;
 ;  Built on top of the hardware-confirmed ECHS ROM
 ;  (binary/SY019L1_27C512_CHSPATCH.BIN of the parent project).
@@ -11,7 +11,8 @@
 ;    0x36D4  AMI main menu            -> JMP bu_main   (tab bar + pages)
 ;    0x38B5  AMI screen header        -> JMP bu_hdr    (title bar + tabs)
 ;    0x0D3D  option-editor getkey     -> CALL bu_edkey (Tab / Shift-Tab)
-;    0x08D5  Standard-CMOS getkey     -> CALL bu_stdkey + NOP
+;    0x08D5  Standard-CMOS getkey     -> CALL bu_stdkey + NOP (Tab, digits)
+;    0x5F94  date/time field getkey   -> CALL bu_dtkey (numeric date/time entry)
 ;    0x5037  16 colour schemes        -> BUBios schemes (F2/F3 cycles them)
 ;    0x4FF6  "bright" OR-mask 0Fh     -> 08h (intensity only, keeps hue)
 ;    0x309A / 0x6D3A  footer texts    -> Tab/ESC hints
@@ -54,6 +55,11 @@ H_DEF      equ 0x5486     ; load BIOS / power-on defaults ([E187]=5/6)
 H_PWD      equ 0xF1C8     ; change password
 H_DETECT   equ 0x4A44     ; auto-detect hard disk
 CALC_FACTOR equ 0x76F5    ; ECHS head-factor routine of the xlate patch
+A_STDKEY   equ 0x08CD     ; Standard CMOS field key reader (flags = navigation)
+A_GETDATE  equ 0x6180     ; CX = year, DH = month, DL = day (BCD, validated)
+A_GETTIME  equ 0x61BA     ; CH = hour, CL = min, DH = sec, DL = DST (BCD)
+A_SETDATE  equ 0x5FCB     ; set RTC date, day clamped to the month, redraw
+A_DTSHOW   equ 0x6022     ; redraw date, time and calendar
 
 ; ---- AMI option records used on the Summary page ----------------------
 R_EXTCACHE equ 0xBDE7     ; External Cache Memory
@@ -95,6 +101,9 @@ BU_PEND    equ 0xEF81     ; Tab (+1) / Shift-Tab (-1) pressed inside a page
 BU_SEL     equ 0xEF82     ; selected entry on the Tools / Exit pages
 BU_MHZ     equ 0xEF84     ; word: measured clock in 1/10 MHz
 BU_CPU     equ 0xEF86     ; CPU family 3/4/5/6
+BU_FPU     equ 0xEF87     ; 1 = numeric coprocessor answered FNINIT
+BU_DTPOS   equ 0xEF88     ; word: row:col of the active date/time field, 0 = none
+BU_DTW     equ 0xEF8A     ; width of that field
 BU_BUF     equ 0xEF90     ; 40-byte text buffer
 
 NTABS      equ 6
@@ -149,11 +158,7 @@ bu_main:
     je   .esc
     cmp  ax, 0x0009
     je   .next
-    cmp  ax, 0x014D
-    je   .next
     cmp  ax, 0x010F
-    je   .prev
-    cmp  ax, 0x014B
     je   .prev
     cmp  ax, 0x0148
     je   .up
@@ -274,7 +279,7 @@ bu_hdr:
     mov  dx, 0x004F
     call A_FILL
     mov  bx, s_title
-    mov  ax, 0x0001
+    xor  ax, ax                    ; row 0, column 0
     call A_PRINTB
     mov  ax, 0x0100                ; frame rows 1..24
     mov  dx, 0x184F
@@ -586,14 +591,9 @@ f_mhz:
     jmp  buf_end
 
 f_fpu:
-    push ds
-    xor  ax, ax
-    mov  ds, ax
-    mov  al, [0x410]
-    pop  ds
     mov  bx, s_present
-    test al, 2
-    jnz  .r
+    cmp  byte [BU_FPU], 0
+    jne  .r
     mov  bx, s_none
 .r: ret
 
@@ -778,6 +778,29 @@ drv_log:
     call put_chs
     jmp  buf_end
 
+; BX in 1..AH ? -> AL = BCD(BX), CF=0 ; else CF=1
+dt_range1:
+    or   bx, bx
+    jz   .bad
+    cmp  bl, ah
+    ja   .bad
+    or   bh, bh
+    jnz  .bad
+    mov  al, bl
+    call dt_bcd
+    clc
+    ret
+.bad:
+    stc
+    ret
+
+; AL (0..99) -> packed BCD
+dt_bcd:
+    aam
+    shl  ah, 4
+    or   al, ah
+    ret
+
 code_end:
 
 ; =====================================================================
@@ -824,6 +847,14 @@ bu_edkey:                          ; replaces CALL 530E at 0x0D3D
 bu_stdkey:                         ; replaces MOV AH,0 / INT 16h at 0x08D5
     mov  ah, 0
     int  0x16
+    cmp  word [BU_DTPOS], 0        ; inside a date/time field?
+    je   .tab
+    cmp  al, '0'
+    jb   .tab
+    cmp  al, '9'
+    ja   .tab
+    call bu_dtentry                ; AX = key that ended the entry
+.tab:
     cmp  ax, 0x0F09
     je   .fwd
     cmp  ax, 0x0F00
@@ -835,6 +866,13 @@ bu_stdkey:                         ; replaces MOV AH,0 / INT 16h at 0x08D5
 .esc:
     mov  ax, 0x011B
 .r: ret
+
+bu_dtkey:                          ; replaces CALL 08CDh at 0x5F94 (date/time fields)
+    mov  [BU_DTPOS], dx
+    mov  [BU_DTW], cl
+    call A_STDKEY
+    mov  word [BU_DTPOS], 0        ; MOV keeps the navigation flags
+    ret
 
 ; ---------------------------------------------------------------------
 ; bu_detect -- CPU family and clock, measured once on setup entry
@@ -873,6 +911,26 @@ bu_detect:
     and  al, 0x0F
     mov  [BU_CPU], al
 .clock:
+    ; numeric coprocessor: FNINIT/FNSTSW/FNSTCW probe with CR0.EM/TS clear
+    ; (the BDA equipment bit is not final yet when setup runs from POST)
+    mov  eax, cr0
+    push eax
+    and  al, 0xF3
+    mov  cr0, eax
+    fninit
+    mov  word [BU_BUF], 0x5A5A
+    fnstsw [BU_BUF]
+    cmp  byte [BU_BUF], 0
+    jne  .nofpu
+    fnstcw [BU_BUF]
+    mov  ax, [BU_BUF]
+    and  ax, 0x103F
+    cmp  ax, 0x003F
+    jne  .nofpu
+    mov  byte [BU_FPU], 1
+.nofpu:
+    pop  eax
+    mov  cr0, eax
     ; PIT channel 2, mode 0, count FFFFh, gated by port 61h bit 0
     cli
     in   al, 0x61
@@ -1044,6 +1102,22 @@ sum_table:
     db 0xFF
 
 cpu_names:   dw s_386, s_486, s_586, s_686
+
+; date/time fields of the Standard page: position, max digits, kind
+dt_fields:
+    dw 0x051B
+    db 2, 0                        ; month
+    dw 0x051F
+    db 2, 1                        ; day
+    dw 0x0522
+    db 4, 2                        ; year
+    dw 0x0616
+    db 2, 3                        ; hour
+    dw 0x061B
+    db 2, 4                        ; minute
+    dw 0x0620
+    db 2, 5                        ; second
+    dw 0
 video_names: dw S_VGA, S_COL40, S_COL80, S_MONO
 
 ; active-tab attribute per colour scheme (index = CMOS 37h low nibble)
@@ -1051,14 +1125,14 @@ tab_attrs:
     db 0x20, 0x60, 0x20, 0x70, 0x70, 0x70, 0x20, 0x60
     db 0x20, 0x70, 0x70, 0x70, 0x20, 0x60, 0x20, 0x70
 
-s_title:   db "BUBios (tm)    Copyright (c) 2026 Bits und Bolts    Ver 0.1    Port OPTi 495SLC", 0
+s_title:   db "BUBios (tm)    Copyright (c) 2026 Bits und Bolts    Ver 1.0    Port OPTi 495SLC", 0
 s_tab0:    db " Summary ", 0
 s_tab1:    db " Standard ", 0
 s_tab2:    db " Advanced ", 0
 s_tab3:    db " Chipset ", 0
 s_tab4:    db " Tools ", 0
 s_tab5:    db " Exit ", 0
-s_foot_main: db 0xB5, " ESC:Exit  ", 0x1B, 0x1A, "/Tab:Page  ", 0x18, 0x19, ":Select  Enter:Run  F2/F3:Color  F10:Save & Exit ", 0xC6, 0
+s_foot_main: db 0xB5, " ESC:Exit  Tab/Shift-Tab:Page  ", 0x18, 0x19, ":Select  Enter:Run  F2/F3:Color  F10:Save & Exit ", 0xC6, 0
 s_tagline: db "Bits und Bolts  ", 0xFE, "  ECHS large-disk support up to 8.4 GB", 0
 
 s_it_def:  db "Load BIOS Setup Defaults", 0
@@ -1093,7 +1167,7 @@ l_video:   db "Video Display", 0
 
 s_chipset: db "OPTi 82C495SLC", 0
 s_core:    db "AMIBIOS 11/11/92", 0
-s_ver:     db "0.1 trial", 0
+s_ver:     db "1.0", 0
 s_386:     db "80386", 0
 s_486:     db "80486", 0
 s_586:     db "Pentium", 0
@@ -1105,3 +1179,214 @@ s_notrans: db "not needed", 0
 s_mb_type: db " MB  [", 0
 
 data_end:
+
+; =====================================================================
+section code2 start=0x1000 vstart=0x7F14
+; =====================================================================
+; bu_dtentry -- numeric entry for a date/time field of the Standard page
+;   In : AL = first digit typed, [BU_DTPOS]/[BU_DTW] = field
+;   Out: AX = key to hand back to AMI's field loop
+;        Enter (next field) after a commit, 0 (ignored) after ESC,
+;        or the navigation key that ended the entry.
+;   Digits fill the field; it commits by itself when full.  Backspace
+;   deletes, ESC cancels.  Years may be typed with 2 or 4 digits.
+bu_dtentry:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push es
+    push 0
+    pop  es
+    add  byte [es:0x28E], 0x40     ; hold AMI's once-a-second clock redraw
+    mov  dx, [BU_DTPOS]
+    mov  si, dt_fields
+.find:
+    cmp  word [si], 0
+    je   .none
+    cmp  [si], dx
+    je   .found
+    add  si, 4
+    jmp  .find
+.none:
+    xor  ax, ax
+    jmp  .done
+.found:
+    mov  byte [BU_BUF], ' '
+    xor  bp, bp                    ; value
+    xor  cx, cx                    ; CL = digits typed
+.digit:
+    cmp  cl, [si+2]
+    jae  .key
+    mov  bl, cl
+    xor  bh, bh
+    mov  [bx+BU_BUF+1], al
+    sub  al, '0'
+    cbw
+    xchg ax, bp
+    mov  bx, 10
+    mul  bx
+    add  bp, ax
+    inc  cl
+    call dt_echo
+    cmp  cl, [si+2]
+    jae  .enter                    ; field full: commit, next field
+.key:
+    mov  ah, 0
+    int  0x16
+    cmp  al, '0'
+    jb   .nd
+    cmp  al, '9'
+    jbe  .digit
+.nd:
+    cmp  ax, 0x0E08                ; Backspace
+    jne  .ne
+    or   cl, cl
+    jz   .key
+    dec  cl
+    mov  ax, bp
+    xor  dx, dx
+    mov  bx, 10
+    div  bx
+    mov  bp, ax
+    call dt_echo
+    jmp  .key
+.ne:
+    cmp  ah, 1                     ; ESC: cancel
+    je   .cancel
+    cmp  ax, 0x1C0D
+    je   .enter
+    push ax                        ; any other key: commit and pass it on
+    call dt_commit
+    pop  ax
+    jmp  .done
+.enter:
+    call dt_commit
+    mov  ax, 0x1C0D
+    jmp  .done
+.cancel:
+    call A_DTSHOW
+    xor  ax, ax
+.done:
+    push 0
+    pop  es
+    sub  byte [es:0x28E], 0x40
+    pop  es
+    pop  bp
+    pop  di
+    pop  si
+    pop  dx
+    pop  cx
+    pop  bx
+    ret
+
+; show " digits" padded to the field width, in the highlight colour
+dt_echo:
+    pusha
+    mov  bl, cl
+    xor  bh, bh
+    lea  di, [bx+BU_BUF+1]
+    movzx ax, byte [BU_DTW]
+    add  ax, BU_BUF
+.pad:
+    cmp  di, ax
+    jae  .pz
+    mov  byte [di], ' '
+    inc  di
+    jmp  .pad
+.pz:
+    mov  byte [di], 0
+    mov  al, [C_SEL]
+    mov  [V_ATTR], al
+    mov  ax, [BU_DTPOS]            ; the field's highlight starts at its column
+    mov  bx, BU_BUF
+    call A_PRINT
+    popa
+    ret
+
+; =====================================================================
+section code3 start=0x1400 vstart=0x7856
+; =====================================================================
+; dt_commit -- write the typed value to the RTC (if valid) and redraw
+;   In: BP = value, CL = digits typed, SI -> dt_fields entry
+dt_commit:
+    or   cl, cl
+    jz   .show
+    mov  bx, bp
+    mov  al, [si+3]
+    cmp  al, 3
+    jae  .time
+    push ax
+    call A_GETDATE
+    pop  ax
+    cmp  al, 1
+    jb   .mon
+    je   .day
+    cmp  bx, 100                   ; year: 2 digits -> 1980..2079
+    jae  .y4
+    add  bx, 1900
+    cmp  bx, 1980
+    jae  .y4
+    add  bx, 100
+.y4:
+    cmp  bx, 1901
+    jb   .show
+    cmp  bx, 2099
+    ja   .show
+    mov  ax, bx
+    mov  bl, 100
+    div  bl
+    mov  bh, ah
+    call dt_bcd
+    mov  ch, al
+    mov  al, bh
+    call dt_bcd
+    mov  cl, al
+    jmp  A_SETDATE
+.mon:
+    mov  ah, 12
+    call dt_range1
+    jc   .show
+    mov  dh, al
+    jmp  A_SETDATE
+.day:
+    mov  ah, 31
+    call dt_range1
+    jc   .show
+    mov  dl, al
+    jmp  A_SETDATE
+.time:
+    push ax
+    call A_GETTIME
+    pop  ax
+    cmp  bx, 59
+    ja   .show
+    cmp  al, 4
+    jb   .hour
+    push ax
+    mov  al, bl
+    call dt_bcd
+    mov  ah, al
+    pop  bx                        ; BL = kind
+    cmp  bl, 4
+    je   .min
+    mov  dh, ah
+    jmp  .sett
+.min:
+    mov  cl, ah
+    jmp  .sett
+.hour:
+    cmp  bx, 23
+    ja   .show
+    mov  al, bl
+    call dt_bcd
+    mov  ch, al
+.sett:
+    mov  ah, 3
+    int  0x1A
+.show:
+    jmp  A_DTSHOW
+
+code3_end:

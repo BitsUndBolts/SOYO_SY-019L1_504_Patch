@@ -89,6 +89,8 @@ class Setup:
         s.cpu_hz = 40e6; s.cpu_cyc_per_insn = 190 / 9
         s.pit_insn = 0; s.pit_lh = 0; s.pit_latched = 0xFFFF
         s.ext_kb = 15360
+        s.rtc_date = [0x2026, 0x0923]      # BCD year, month:day   (INT 1Ah 04h/05h)
+        s.rtc_time = [0x1230, 0x0000]      # BCD hour:min, sec:DST (INT 1Ah 02h/03h)
         s.drive = drive
         s.ports_log = []
         s.stopped_reason = None
@@ -204,8 +206,11 @@ class Setup:
             return
         if intno == 0x1A:
             if ah == 0x00: uc.reg_write(UC_X86_REG_CX, 0x0012); uc.reg_write(UC_X86_REG_DX, 0x3456); uc.reg_write(UC_X86_REG_AX, 0)
-            if ah == 0x02: uc.reg_write(UC_X86_REG_CX, 0x1230); uc.reg_write(UC_X86_REG_DX, 0x0000); s._flags(cf=False)
-            if ah == 0x04: uc.reg_write(UC_X86_REG_CX, 0x2026); uc.reg_write(UC_X86_REG_DX, 0x0923); s._flags(cf=False)
+            cx = uc.reg_read(UC_X86_REG_CX); dx = uc.reg_read(UC_X86_REG_DX)
+            if ah == 0x02: uc.reg_write(UC_X86_REG_CX, s.rtc_time[0]); uc.reg_write(UC_X86_REG_DX, s.rtc_time[1]); s._flags(cf=False)
+            if ah == 0x03: s.rtc_time = [cx, dx & 0xFF00]; s._flags(cf=False)
+            if ah == 0x04: uc.reg_write(UC_X86_REG_CX, s.rtc_date[0]); uc.reg_write(UC_X86_REG_DX, s.rtc_date[1]); s._flags(cf=False)
+            if ah == 0x05: s.rtc_date = [cx, dx]; s._flags(cf=False)
             return
         if intno == 0x11: uc.reg_write(UC_X86_REG_AX, 0x4041); return
         if intno == 0x12: uc.reg_write(UC_X86_REG_AX, 640); return

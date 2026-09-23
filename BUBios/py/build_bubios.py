@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Build the BUBios trial ROM on top of the hardware-confirmed ECHS ROM.
+Build the BUBios 1.0 ROM on top of the hardware-confirmed ECHS ROM.
 
     python3 py/build_bubios.py        (from the BUBios folder; needs NASM)
 
@@ -27,6 +27,8 @@ OUT  = os.path.join(ROOT, 'binary', 'BUBIOS_SY019L1.BIN')
 ECHS_MD5  = '8e520e91100f932d3f054883b08d37da'
 CODE_BLK  = (0xDA84, 0xE000)       # executed from F000 only
 DATA_BLK  = (0x7902, 0x7EFE)       # copied to 0100:xxxx by the setup
+CODE2_BLK = (0x7F14, 0x8000)       # date/time entry (code only)
+CODE3_BLK = (0x7856, 0x7900)       # date/time commit (code only); 7900 = ECHS checksum word
 CHECKSUM  = 0x7EFE
 
 def die(msg): sys.exit('BUILD FAILED: ' + msg)
@@ -44,17 +46,16 @@ sec = {m.group(5): (int(m.group(1), 16), int(m.group(2), 16), int(m.group(4), 16
        for m in re.finditer(r'^\s*([0-9A-F]+)\s+([0-9A-F]+)\s+([0-9A-F]+)\s+([0-9A-F]+)\s+progbits\s+(\w+)', mp, re.M)}
 sym = {m.group(2): int(m.group(1), 16)
        for m in re.finditer(r'^\s+[0-9A-F]+\s+([0-9A-F]+)\s+(\w+)\s*$', mp, re.M)}
-code_v, code_s, code_len = sec['code']
-data_v, data_s, data_len = sec['data']
-assert code_v == CODE_BLK[0] and data_v == DATA_BLK[0]
-if code_v + code_len > CODE_BLK[1]: die('code block overflow (%d bytes too long)' % (code_v + code_len - CODE_BLK[1]))
-if data_v + data_len > DATA_BLK[1]: die('data block overflow (%d bytes too long)' % (data_v + data_len - DATA_BLK[1]))
-
-for lo, hi in (CODE_BLK, (DATA_BLK[0], DATA_BLK[1] + 2)):
-    if any(rom[lo:hi]): die('free block %04X-%04X is not empty in the input' % (lo, hi))
-
-rom[code_v:code_v + code_len] = blob[code_s:code_s + code_len]
-rom[data_v:data_v + data_len] = blob[data_s:data_s + data_len]
+BLOCKS = (('code', CODE_BLK), ('data', DATA_BLK), ('code2', CODE2_BLK), ('code3', CODE3_BLK))
+for name, (lo, hi) in BLOCKS:
+    v, st, ln = sec[name]
+    assert v == lo, name
+    if v + ln > hi: die('%s block overflow (%d bytes too long)' % (name, v + ln - hi))
+    end = hi + 2 if name == 'data' else hi
+    if any(rom[lo:end]): die('free block %04X-%04X is not empty in the input' % (lo, end))
+for name, (lo, hi) in BLOCKS:
+    v, st, ln = sec[name]
+    rom[v:v + ln] = blob[st:st + ln]
 
 # ------------------------------------------------------------------ helpers
 def patch(at, old, new, what):
@@ -97,6 +98,10 @@ for at, lab in ((0xBDE7, 'External Cache Memory'), (0xBE8F, 'Video   ROM Shadow 
     if rom[at + 0x1E] & 0x7F: die('record %04X has a value hook' % at)
 assert struct.unpack_from('<H', rom, 0x8292)[0] == 0xB898
 assert struct.unpack_from('<H', rom, 0xE401)[0] == 306           # drive type 1 = 306 cyl
+for at, want, what in ((0x08CD, '5351bb5149', 'std key reader'), (0x6180, 'b404cd1a', 'get date'),
+                       (0x61BA, 'b402cd1a', 'get time'), (0x5FCB, '51b500', 'set date'),
+                       (0x6022, '5583ec0a', 'show date/time')):
+    if rom[at:at + len(want) // 2].hex() != want: die('%s routine at %04X not as expected' % (what, at))
 assert rom[0x76F5:0x76FA] == b'\x53\x89\xc3\x89\xc8'                      # ECHS calc_factor: push bx / mov bx,ax / mov ax,cx
 
 # ------------------------------------------------------------------ code patch sites
@@ -104,6 +109,7 @@ patch(0x36D4, b'\x55\x8b\xec', b'\xe9' + rel16(0x36D4, sym['bu_main']), 'main me
 patch(0x38B5, b'\x55\x8b\xec', b'\xe9' + rel16(0x38B5, sym['bu_hdr']), 'header -> bu_hdr')
 patch(0x0D3D, b'\xe8\xce\x45', b'\xe8' + rel16(0x0D3D, sym['bu_edkey']), 'editor getkey -> bu_edkey')
 patch(0x08D5, b'\xb4\x00\xcd\x16', b'\xe8' + rel16(0x08D5, sym['bu_stdkey']) + b'\x90', 'standard getkey -> bu_stdkey')
+patch(0x5F94, b'\xe8\x36\xa9', b'\xe8' + rel16(0x5F94, sym['bu_dtkey']), 'date/time getkey -> bu_dtkey')
 
 # ------------------------------------------------------------------ colours
 # 16 schemes x 4 bytes; each byte b gives an attribute pair (b, b with nibbles swapped):
@@ -153,7 +159,8 @@ assert sum(struct.unpack('<32768H', bytes(rom))) & 0xFFFF == 0
 os.makedirs(os.path.dirname(OUT), exist_ok=True)
 open(OUT, 'wb').write(rom)
 title = cstr(sym['s_title'])
-print('code  %04X-%04X  %4d bytes (%d free)' % (code_v, code_v + code_len - 1, code_len, CODE_BLK[1] - code_v - code_len))
-print('data  %04X-%04X  %4d bytes (%d free)' % (data_v, data_v + data_len - 1, data_len, DATA_BLK[1] - data_v - data_len))
+for name, (lo, hi) in BLOCKS:
+    v, st, ln = sec[name]
+    print('%-5s %04X-%04X  %4d bytes (%d free)' % (name, v, v + ln - 1, ln, hi - v - ln))
 print('title %d chars' % len(title))
 print('wrote', os.path.relpath(OUT, ROOT), 'MD5', hashlib.md5(rom).hexdigest())
