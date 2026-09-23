@@ -9,7 +9,8 @@ Soyo 386 AMI BIOS — Hard Disk Size Limit: Findings & Patch Design
 > **About this document.** This is the development log, written as the
 > work happened (v1 → v5). Sections 3–7 describe bugs in intermediate
 > versions and the reasoning at the time, including hypotheses that were
-> later ruled out; the "open problem" in §5 was solved in §6. Only the
+> later ruled out. Everything marked as open in §5–§7 was resolved by v5 (§8).
+> The "open problem" in §5 was solved in §6. Only the
 > final version (v5) is included in this repository — earlier ROMs,
 > sources and scripts were omitted for clarity. Script names in the log
 > refer to the development-time files; their final equivalents are:
@@ -91,7 +92,7 @@ a hard disk configured, in every geometry tested, including drives where
 the drive itself still isn't otherwise accessible from DOS (see §5) —
 i.e. this specific bug is fully resolved independent of the newer problem.
 
-5. Open problem: most translated drives fail DOS/FDISK recognition
+5. Open problem at the time (solved in §6): most translated drives fail DOS/FDISK recognition
 -----------------------------------------------------------------------
 
 With both bugs above fixed, drives were tested end-to-end (boot from
@@ -170,7 +171,7 @@ blocker. Revisit this once the read-path mystery is solved.
 `ide_harness.py` and `verify_model.py` remain the tools of choice for
 testing hypotheses quickly before touching real hardware again.
 
-6. v4 — ROOT CAUSE of §5 found (emulation-verified, awaiting real HW)
+6. v4 — ROOT CAUSE of §5 found (confirmed on hardware in §7)
 ------------------------------------------------------------------------
 
 **Bug #3 (the §5 blocker): AH=08h never sets DL = drive count.**
@@ -222,7 +223,7 @@ upper 32-bit halves preserved. For factor-1 drives, all functions
 produce identical IDE register traffic to the original ROM.
 v4 MD5: e0a33c21fe8d6bf70b956684c16d9aa1.
 
-**Still open:**
+**Still open at the time (all resolved in v5, see §7 and §8):**
 - 7899/16/63 "FDD controller failure" at POST is NOT explained by
   emulation (2GB card also got DL=3 and POSTed fine). May disappear
   with bugs #4/#5 fixed; if not, check that 7899 cyl really matches the
@@ -271,7 +272,7 @@ BDA status byte and IDE port write, across all 15 INT 13h functions
 (AH=00,01,02,04,05,08,09,0A,0C,0D,10,11,14,15,19). 44 reads per geometry
 across 10 geometries hit exactly the right LBA with no register damage.
 
-**Boot-from-C: analysis (open).** The ROM's boot path was traced and
+**Boot-from-C: analysis (resolved in §8).** The ROM's boot path was traced and
 emulated end to end (`boot_test.py` runs the real INT 19h handler at
 `0xF758`):
 - `0xF779` reads the boot-order CMOS bit; C:-first lands at `0xF7CA`.
@@ -324,8 +325,8 @@ entered as type 47, under v5:
   v5's geometry change only affects cases that would have needed 256
   heads.
 
-**Remaining failures are attributed to hardware, not the ROM.** Several
-other CF cards and at least one CF-to-IDE adapter still misbehave, while
+**Other cards and adapters.** Several
+other CF cards and at least one CF-to-IDE adapter did not work on this board, while
 emulation shows the patched ROM issues correct task-file addresses for
 those geometries. The earlier "cannot boot from C:" reports fall into the
 same bucket, compounded by leftover foreign boot records on the media.

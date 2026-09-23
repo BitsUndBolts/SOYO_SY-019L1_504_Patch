@@ -170,7 +170,7 @@ POST verifies that the 16-bit word sum of the whole 64 KB ROM is zero.
 
 ---
 
-## 5. Verifying it yourself
+## 5. Reproducing the build and tests
 
 ```sh
 python3 py/build.py        # rebuilds the ROM, checks the MD5

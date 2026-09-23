@@ -2,6 +2,11 @@
 """Drive the BUBios setup in the emulator and save a screenshot per page.
 
     python3 py/shots.py [rom]         -> shots/*.png
+
+The emulator's CPU (Unicorn) identifies itself as a modern CPU with CPUID.
+For the screenshots it is presented as the board's 386DX-40 with a
+coprocessor: the CPU-type probe is overridden to "386", so the clock is
+computed with the 386 cycle count against the emulator's 40 MHz PIT model.
 """
 import os, re, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -12,8 +17,13 @@ mp = open(os.path.join(ROOT, 'asm', 'bubios.map')).read()
 sym = {m.group(2): int(m.group(1), 16) for m in re.finditer(r'^\s+[0-9A-F]+\s+([0-9A-F]+)\s+(\w+)\s*$', mp, re.M)}
 loop = (sym['bu_tloop'], sym['bu_tloop_end'])
 
+clock_label = int(re.search(r'^\s+[0-9A-F]+\s+([0-9A-F]+)\s+bu_detect\.clock\s*$', mp, re.M).group(1), 16)
+
 def new(**kw):
     s = Setup(load_rom(rom_path), timing_loop=loop, **kw)
+    def as_386(uc, addr, size, ud):                 # CPU family byte BU_CPU (DS:EF86) = 3
+        uc.mem_write(0x1000 + 0xEF86, b'\x03')
+    s.mu.hook_add(UC_HOOK_CODE, as_386, begin=0xF0000 + clock_label, end=0xF0000 + clock_label)
     r = s.run()
     assert r == 'key', (r, s.where())
     return s

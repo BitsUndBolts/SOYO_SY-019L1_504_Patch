@@ -1,12 +1,14 @@
 # BUBios 1.0
 
-This is a new look for the setup program of the SOYO SY-019L1 BIOS, in the style of MR BIOS: a row of tabs across the top and a Summary page that opens first. It is built on top of the ECHS ROM from the parent project, which was confirmed on the real board. The disk code is not changed.
+BUBios is a new setup program for the SOYO SY-019L1 BIOS, in the style of MR BIOS. It puts a row of tabs across the top of the screen, opens on a Summary page, and lets you type the date and time as numbers. It is built on top of the ECHS large-disk ROM from the [parent project](../README.md) and leaves its disk code unchanged.
 
-**Status:** trial 0.1 was tested on the real board. The Summary page, CPU type and CPU clock were confirmed there. Version 1.0 adds typing the date and time as numbers and the fixes from that test (see [CHANGELOG.md](CHANGELOG.md)); it has passed the emulator tests but has not been burned yet. Keep the ECHS EPROM (MD5 `8e520e91…`) as a fallback.
+**Status:** finished, version 1.0. It runs on the real board (SOYO SY-019L1, 386DX-40, Cyrix FasMath coprocessor) together with the ECHS large-disk support. The version history is in [CHANGELOG.md](CHANGELOG.md).
+
+This BIOS generation has no recovery block, so keep the original chip or dump before programming an EPROM.
 
 | | |
 |---|---|
-| ROM to burn | `binary/BUBIOS_SY019L1.BIN` (64 KB, 27C512) |
+| ROM image | `binary/BUBIOS_SY019L1.BIN` (64 KB, 27C512) |
 | MD5 | `087565a6ba5e86a058275965c6bdca60` |
 | Based on | `../binary/SY019L1_27C512_CHSPATCH.BIN` (ECHS v5, MD5 `8e520e91100f932d3f054883b08d37da`) |
 | New code / data | 1283 B at `DA84`, 1486 B at `7902`, 217 B at `7F14`, 158 B at `7856` (198 B left in these blocks) |
@@ -15,6 +17,8 @@ This is a new look for the setup program of the SOYO SY-019L1 BIOS, in the style
 ## What you see
 
 ![Summary](shots/1_summary.png)
+
+*The screenshots in this folder are rendered by the emulator described below, which is set up to match the test board.*
 
 Six tabs: **Summary · Standard · Advanced · Chipset · Tools · Exit**
 
@@ -79,7 +83,7 @@ AMI's setup program is table-driven, and it draws all its screens through one he
 | `4FF6` | "bright" mask `0Fh` → `08h`, so highlighted values stay teal instead of turning white |
 | `309A`, `6D3A` | Footer texts now mention Tab and ESC |
 
-**How the clock is measured:** the CPU runs 2000 × (8 × `DIV r16` + `LOOP`) from the setup's RAM copy, timed with PIT channel 2. The result is snapped to the nearest standard clock within 6 %. The cycle counts behind it are 190 per loop on a 386, 199 on a 486 and 206 on a Pentium. If the reading is off on your board, only the constant in `clock_k` needs changing.
+**How the clock is measured:** the CPU runs 2000 × (8 × `DIV r16` + `LOOP`) from the setup's RAM copy, timed with PIT channel 2. The result is snapped to the nearest standard clock within 6 %. The cycle counts behind it are 190 per loop on a 386, 199 on a 486 and 206 on a Pentium. It reads the clock correctly on the test board. For other CPUs, the per-family cycle counts are in `clock_k`.
 
 **How date/time entry works:** AMI edits the date and time directly in the real-time clock (RTC). A typed value goes through AMI's own routines: set date at `5FCB` (which keeps the day valid for the month) or INT 1Ah AH=03h, then redraw at `6022`. While you type, AMI's once-a-second clock redraw is paused so it doesn't overwrite your digits.
 
@@ -101,7 +105,7 @@ python3 py/shots.py            # screenshots of every page into shots/
 - **Build checks:** `build_bubios.py` checks the MD5 of the input ROM, the original bytes at every patch site, every AMI string and option record it reuses, that both free blocks are empty, that the code and data fit their blocks, and the final checksum.
 - **Emulator:** `setup_emu.py` enters the ROM's real setup the way POST does (F000:2968) in Unicorn. It emulates INT 10h and text video memory, scripts INT 16h keystrokes, emulates the CMOS, and models PIT channel 2 for the clock measurement. It saves the 80×25 screen as a PNG, using the IBM VGA 9×16 font from VileR's Oldschool PC Font Pack (CC BY-SA 4.0).
 
-**Test results (emulator):**
+**Automated tests:**
 
 - `test_bubios.py`: 67/67 pass. It covers:
   - the Summary contents for five drive geometries
@@ -112,12 +116,8 @@ python3 py/shots.py            # screenshots of every page into shots/
   - typing the date and time: full fields, 2-digit years, invalid values, Backspace, ESC, and committing with Tab or an arrow key
 - `regress_echs.py`: all 10 ECHS geometries pass, and INT 19h boot passes for all 5 cases, exactly as with the ECHS ROM.
 
-## Please check on the real board (1.0)
-
-1. **Math Unit** shows "Present" with the Cyrix FasMath fitted.
-2. **Typing the date and time**, including while the clock is ticking. The seconds must not overwrite your digits while you type.
-3. The **arrow keys** on the Summary, Tools and Exit pages don't switch tabs.
-4. **Save and exit**, then boot from the CF card.
+## More screenshots
 
 ![Advanced](shots/3_advanced.png)
 ![Tools](shots/5b_tools_password_selected.png)
+![Date and time entry](shots/2b_standard_typing_hour.png)

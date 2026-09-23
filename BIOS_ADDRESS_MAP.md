@@ -9,7 +9,7 @@ byte explained).
 
 **[verified]** = confirmed by disassembly and/or execution (including via
 the `py/ide_harness.py` emulator). **[located]** = found by string/pattern
-search. **[open]** = unresolved.
+search.
 
 ---
 
@@ -19,7 +19,7 @@ search. **[open]** = unresolved.
 |---|---|---|---|
 | `0000-00A6`ish | ~166 B | BIOS ID/signature block #1 | [located] |
 | `3082` | — | `"AMIBIOS SETUP PROGRAM"` | [located] |
-| `76F5-7F00` | 2,059 B | Free space — translation patch lives here (`76F5-7855`, 353 bytes) plus the checksum word at `7900` | [verified — in use] |
+| `76F5-7F00` | 2,059 B | Originally free. ECHS patch at `76F5-7855` (353 bytes) and its checksum word at `7900`. The BUBios ROM also uses `7856-78FF` and `7902-7EFF` | [verified — in use] |
 | `8000` | — | BIOS ID/signature block #2 | [located] |
 | `8078/8097` | — | Chipset/board ID: `"40-040A-001102-00101111-111192-OP495SLC"` | [located] |
 | **`A44B-A484`** | **52 B** | **INT13h `AH=` dispatch table, 26 entries (AH=00h-19h)** | **[verified]** — see §4 |
@@ -74,8 +74,8 @@ Base `CS:0xA44B`, `DI = AH*2`, `CALL [CS:DI+0xA44B]` at `0xA417`, valid for
 | 09 | Initialize Drive Params | `A691` | separate routine, own dispatch entry, **not** reached via fall-through from AH=08h |
 | 0C | Seek | `A7CE` | translated |
 
-(Full 26-entry table unchanged from before; see prior revisions if needed
-for the unlisted entries — nothing about them has changed.)
+(Only the entries that matter for the patch are listed. The other entries of
+the 26-entry table are unchanged from the original ROM.)
 
 ---
 
@@ -123,4 +123,5 @@ never written** (an earlier version did, and corrupted DX for every caller — b
 `py/analyze_bios.py` reproduces the ROM-structural `[verified]` facts above.
 `py/ide_harness.py` executes real INT 13h calls against either ROM through
 the actual dispatcher; `py/regress.py` and `py/boot_test.py` build on it.
-Open items are listed in `Plan.txt`.
+The BUBios setup UI (`BUBios/`) documents the setup-program addresses it
+uses in `BUBios/README.md`.

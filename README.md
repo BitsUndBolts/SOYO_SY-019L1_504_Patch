@@ -6,9 +6,19 @@ hard-disk INT 13h handler. It lifts the 504 MB limit to the full INT 13h
 CHS ceiling of **8.42 GB (7.84 GiB)**, with no LBA and without needing
 more than the existing 64 KB EPROM (27C512).
 
-**Status: working on real hardware.** An 8 GB CF card (16000/16/63 →
-1002/255/63) partitions, formats, benchmarks and boots from C:. See
-`Project_Overview.md` for the full list of tested drives.
+**Status: complete, and confirmed on real hardware.** An 8 GB CF card
+(16000/16/63 → 1002/255/63) partitions, formats, benchmarks and boots from
+C:. `Project_Overview.md` lists all the tested drives.
+
+On top of the patch, **[BUBios](BUBios/README.md)** gives the same BIOS a
+new setup program in the style of MR BIOS:
+
+- tabs across the top
+- a Summary page with the CPU, measured clock, coprocessor, memory, and
+  each disk's physical and ECHS geometry
+- typing the date and time as numbers
+
+![BUBios Summary page](BUBios/shots/1_summary.png)
 
 > This repository contains only the final version of the patch (v5).
 > Earlier development versions were omitted for clarity; the bug history
@@ -23,7 +33,7 @@ HOW_THE_PATCH_WORKS.md             every changed byte explained, with pseudo cod
 CHS_TRANSLATION_PORTING_GUIDE.md   the method, written to be reused on other BIOSes
 BIOS_ADDRESS_MAP.md                verified address map of this ROM
 BIOS_Evaluation.md                 root-cause analysis and development/bug log
-Plan.txt                           done / open items
+CHANGELOG.md                       version history of the ECHS patch (v1 → v5)
 LICENSE
 
 asm/
@@ -41,11 +51,23 @@ py/
   boot_test.py                     runs the ROM's INT 19h boot path
   verify_model.py                  translation math in plain Python
   analyze_bios.py                  reproduces the ROM-structure facts
+
+BUBios/                            stage 2: the MR-BIOS-style setup UI
+  README.md, CHANGELOG.md          what it does, how it works, version history
+  binary/BUBIOS_SY019L1.BIN        ECHS patch + BUBios   MD5 087565a6ba5e86a058275965c6bdca60
+  asm/bubios.asm                   NASM source
+  py/                              build, setup emulator, tests, screenshots
+  shots/                           screenshots of every page
 ```
 
 ## Using the ROM
 
-1. Program `binary/SY019L1_27C512_CHSPATCH.BIN` into a 27C512 EPROM.
+1. Program one of the two ROMs into a 27C512 EPROM:
+   - `BUBios/binary/BUBIOS_SY019L1.BIN`: large-disk support and the new
+     BUBios setup screens.
+   - `binary/SY019L1_27C512_CHSPATCH.BIN`: large-disk support with the
+     original AMI setup screens.
+
    Keep the original chip: this BIOS generation has no recovery block.
 2. In BIOS setup, enter the drive's **physical** geometry as type 47
    (auto-detect works). The BIOS reports the translated geometry to DOS.
@@ -61,6 +83,9 @@ Changing the type-47 geometry later changes the translated geometry, so
 existing partitions would no longer be readable.
 
 ## Building and testing
+
+These steps cover the ECHS patch. BUBios has its own build and tests;
+see `BUBios/README.md`.
 
 Requires Python 3 and [NASM](https://www.nasm.us); the emulator tests
 also need [Unicorn](https://www.unicorn-engine.org/) (`pip install unicorn`).

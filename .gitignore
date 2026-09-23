@@ -1,6 +1,10 @@
 # Build intermediates
 asm/xlate.bin
+BUBios/asm/bubios.bin
 
 # Python
 __pycache__/
 *.pyc
+
+# Files the Claude desktop app copies into this folder
+Claude outputs/
