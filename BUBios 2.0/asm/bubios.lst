@@ -1,0 +1,2876 @@
+     1                                  ; =====================================================================
+     2                                  ;  BUBios -- MR-BIOS-style front end for the AMIBIOS 11/11/92 setup
+     3                                  ;  (SOYO SY-019L1, OPTi 82C495SLC, 27C512) -- version 2.0
+     4                                  ;
+     5                                  ;  2.0 adds the POST screen in post.asm (included at the end of this file)
+     6                                  ;  and removes dead AMI code; see README.md.
+     7                                  ;
+     8                                  ;  Built on top of the hardware-confirmed ECHS ROM
+     9                                  ;  (binary/SY019L1_27C512_CHSPATCH.BIN of the parent project).
+    10                                  ;
+    11                                  ;  What this adds (all patch sites are applied and verified by
+    12                                  ;  py/build_bubios.py, which asserts the original bytes first):
+    13                                  ;
+    14                                  ;    0x36D4  AMI main menu            -> JMP bu_main   (tab bar + pages)
+    15                                  ;    0x38B5  AMI screen header        -> JMP bu_hdr    (title bar + tabs)
+    16                                  ;    0x0D3D  option-editor getkey     -> CALL bu_edkey (Tab / Shift-Tab)
+    17                                  ;    0x08D5  Standard-CMOS getkey     -> CALL bu_stdkey + NOP (Tab, digits)
+    18                                  ;    0x5F94  date/time field getkey   -> CALL bu_dtkey (numeric date/time entry)
+    19                                  ;    0x5037  16 colour schemes        -> BUBios schemes (F2/F3 cycles them)
+    20                                  ;    0x4FF6  "bright" OR-mask 0Fh     -> 08h (intensity only, keeps hue)
+    21                                  ;    0x309A / 0x6D3A  footer texts    -> Tab/ESC hints
+    22                                  ;
+    23                                  ;  Code lives in the free block 0xDA84-0xDFFF (executed from F000).
+    24                                  ;  Data (and the small timing loop) live in the free block 0x7902-0x7EFD.
+    25                                  ;  The setup program copies F000:0000-DFFF to 0100:0000 and runs with
+    26                                  ;  DS=SS=0100h, so DS-relative data must sit below 0xE000 -- and not in
+    27                                  ;  0xDA84-0xDFFF, which is the setup's stack in that RAM copy.  That is
+    28                                  ;  why every string/table is in the 0x79xx block.
+    29                                  ; =====================================================================
+    30                                  [map all bubios.map]
+    31                                  BITS 16
+    32                                  CPU 386
+    33                                  
+    34                                  ; ---- AMI setup routines (all near, segment F000) --------------------
+    35                                  A_RDCMOS   equ 0x84CB     ; read CMOS into the image at DS:E000
+    36                                  A_VIDINIT  equ 0x5077     ; video mode + colour scheme -> E1A2..E1A9
+    37                                  A_CUROFF   equ 0x0995     ; hide cursor
+    38                                  A_SETUPOK  equ 0x54AE     ; AX<>0 if menu item [E187] is available
+    39                                  A_NOSETUP  equ 0x3704     ; "NO CMOS SETUP PRESENT" path (exits setup)
+    40                                  A_BOX      equ 0x5199     ; box  AX=top-left DX=bottom-right BX=style
+    41                                  A_FILL     equ 0x520E     ; fill AX=top-left DX=bottom-right, attr [E19F]
+    42                                  A_HLINE    equ 0x526E     ; horizontal line AX=start DL=len BX=style
+    43                                  A_VLINE    equ 0x5286     ; vertical line   AX=start DL=len BX=style
+    44                                  A_PRINT    equ 0x52DF     ; print DS:BX at AX=row:col, attr [E19F]
+    45                                  A_PRINTB   equ 0x52BB     ; same, bright
+    46                                  A_PRINTC   equ 0x52D2     ; same, centred on column AL
+    47                                  A_PUTCH    equ 0x52FA     ; print char AL at DX=row:col
+    48                                  A_FOOTER   equ 0x390F     ; framed footer caption DS:BX centred at AX
+    49                                  A_GETKEY   equ 0x530E     ; AX = ASCII, or 100h+scan for extended keys
+    50                                  A_COLOUR   equ 0x50BA     ; F2/F3 colour cycling (reads [E182])
+    51                                  A_SAVEEXIT equ 0x29DD     ; "Write to CMOS and Exit (Y/N)?"
+    52                                  A_QUIT     equ 0x29EC     ; "Want to Quit Without Saving (Y/N)?"
+    53                                  A_VALSTR   equ 0x5B21     ; AX = value string of option record [E18F]
+    54                                  H_STD      equ 0x00EC     ; Standard CMOS setup page
+    55                                  H_ADV      equ 0x0BDE     ; Advanced CMOS setup page
+    56                                  H_CHIP     equ 0x0C05     ; Advanced chipset setup page
+    57                                  H_DEF      equ 0x5486     ; load BIOS / power-on defaults ([E187]=5/6)
+    58                                  H_PWD      equ 0xF1C8     ; change password
+    59                                  H_DETECT   equ 0x4A44     ; auto-detect hard disk
+    60                                  CALC_FACTOR equ 0x76F5    ; ECHS head-factor routine of the xlate patch
+    61                                  A_STDKEY   equ 0x08CD     ; Standard CMOS field key reader (flags = navigation)
+    62                                  A_GETDATE  equ 0x6180     ; CX = year, DH = month, DL = day (BCD, validated)
+    63                                  A_GETTIME  equ 0x61BA     ; CH = hour, CL = min, DH = sec, DL = DST (BCD)
+    64                                  A_SETDATE  equ 0x5FCB     ; set RTC date, day clamped to the month, redraw
+    65                                  A_DTSHOW   equ 0x6022     ; redraw date, time and calendar
+    66                                  
+    67                                  ; ---- AMI option records used on the Summary page ----------------------
+    68                                  R_EXTCACHE equ 0xBDE7     ; External Cache Memory
+    69                                  R_VSHADOW  equ 0xBE8F     ; Video ROM Shadow C000,16K
+    70                                  R_SSHADOW  equ 0xC057     ; System ROM Shadow F000,64K
+    71                                  R_BOOTSEQ  equ 0xBDA3     ; System Boot Up Sequence
+    72                                  R_NUMLOCK  equ 0xBD1D     ; System Boot Up Num Lock
+    73                                  R_PASSWORD equ 0xBE6D     ; Password Checking Option
+    74                                  
+    75                                  ; ---- AMI strings reused (verified by the build script) ----------------
+    76                                  S_FLOPPY   equ 0x6F35     ; "360  KB, 5.."  stride 17
+    77                                  S_MONO     equ 0x6F8A
+    78                                  S_COL80    equ 0x6F9B
+    79                                  S_COL40    equ 0x6FAC
+    80                                  S_VGA      equ 0x6FBD
+    81                                  S_HELP_DEF equ 0x2D4F
+    82                                  S_HELP_PON equ 0x2D9B
+    83                                  S_HELP_PWD equ 0x2DE5
+    84                                  S_HELP_DET equ 0x2E11
+    85                                  S_HELP_SAV equ 0x2E7C
+    86                                  S_HELP_QUT equ 0x2E75
+    87                                  
+    88                                  ; ---- setup data segment (DS = 0100h) ---------------------------------
+    89                                  CMOS       equ 0xE000     ; CMOS image, CMOS+n = register n
+    90                                  V_KEY      equ 0xE182
+    91                                  V_ITEM     equ 0xE187     ; current AMI main-menu item (handlers read it)
+    92                                  V_REC      equ 0xE18F
+    93                                  V_VSTR     equ 0xE197
+    94                                  V_ATTR     equ 0xE19F     ; current drawing attribute
+    95                                  C_CONTENT  equ 0xE1A2
+    96                                  C_SEL      equ 0xE1A3
+    97                                  C_HDR      equ 0xE1A8
+    98                                  AMI_VSTR   equ 0x8292     ; word: base of the option value strings
+    99                                  AMI_VIDSEG equ 0x4FF4     ; word: B800h / B000h
+   100                                  
+   101                                  ; BUBios state -- in the setup's zero-initialised, otherwise unused area
+   102                                  BU_TAB     equ 0xEF80     ; current tab 0..NTABS-1
+   103                                  BU_PEND    equ 0xEF81     ; Tab (+1) / Shift-Tab (-1) pressed inside a page
+   104                                  BU_SEL     equ 0xEF82     ; selected entry on the Tools / Exit pages
+   105                                  BU_MHZ     equ 0xEF84     ; word: measured clock in 1/10 MHz
+   106                                  BU_CPU     equ 0xEF86     ; CPU family 3/4/5/6
+   107                                  BU_FPU     equ 0xEF87     ; 1 = numeric coprocessor answered FNINIT
+   108                                  BU_DTPOS   equ 0xEF88     ; word: row:col of the active date/time field, 0 = none
+   109                                  BU_DTW     equ 0xEF8A     ; width of that field
+   110                                  BU_BUF     equ 0xEF90     ; 40-byte text buffer
+   111                                  
+   112                                  NTABS      equ 6
+   113                                  LBLW       equ 18         ; label field width on the Summary page
+   114                                  ITEMSZ     equ 7          ; size of a Tools/Exit list entry
+   115                                  
+   116                                  ; =====================================================================
+   117                                  section code start=0 vstart=0xDA84
+   118                                  ; =====================================================================
+   119                                  
+   120                                  ; ---------------------------------------------------------------------
+   121                                  ; bu_main -- replaces the AMI main menu (entered by JMP from 0x2997)
+   122                                  ; ---------------------------------------------------------------------
+   123                                  bu_main:
+   124 00000000 E8(CB84)                    call A_RDCMOS
+   125 00000003 E8(7750)                    call A_VIDINIT
+   126 00000006 E8(9509)                    call A_CUROFF
+   127 00000009 E8(7D00)                    call bu_detect
+   128 0000000C C60687E100                  mov  byte [V_ITEM], 0
+   129 00000011 E8(AE54)                    call A_SETUPOK
+   130 00000014 09C0                        or   ax, ax
+   131 00000016 7509                        jnz  .loop
+   132 00000018 B8[4F03]                    mov  ax, s_foot_main
+   133 0000001B E81A01                      call bu_hdr
+   134 0000001E E9(0437)                    jmp  A_NOSETUP
+   135                                  
+   136                                  .loop:
+   137 00000021 A080EF                      mov  al, [BU_TAB]
+   138 00000024 3C01                        cmp  al, 1
+   139 00000026 7225                        jb   .menu
+   140 00000028 3C03                        cmp  al, 3
+   141 0000002A 7721                        ja   .menu
+   142                                      ; ---- AMI pages: Standard / Advanced / Chipset ----
+   143 0000002C FEC8                        dec  al
+   144 0000002E A287E1                      mov  [V_ITEM], al
+   145 00000031 98                          cbw
+   146 00000032 89C3                        mov  bx, ax
+   147 00000034 D1E3                        shl  bx, 1
+   148 00000036 C60681EF00                  mov  byte [BU_PEND], 0
+   149 0000003B FF97[B901]                  call [bx+page_handlers]
+   150 0000003F A081EF                      mov  al, [BU_PEND]
+   151 00000042 08C0                        or   al, al
+   152 00000044 7560                        jnz  .step
+   153 00000046 C60680EF00                  mov  byte [BU_TAB], 0          ; plain ESC -> back to Summary
+   154 0000004B EBD4                        jmp  .loop
+   155                                  
+   156                                  .menu:
+   157 0000004D E86C01                      call bu_draw_page
+   158 00000050 E8(0E53)                    call A_GETKEY
+   159 00000053 A382E1                      mov  [V_KEY], ax
+   160 00000056 83F81B                      cmp  ax, 0x001B
+   161 00000059 7430                        je   .esc
+   162 0000005B 83F809                      cmp  ax, 0x0009
+   163 0000005E 7440                        je   .next
+   164 00000060 3D0F01                      cmp  ax, 0x010F
+   165 00000063 743F                        je   .prev
+   166 00000065 3D4801                      cmp  ax, 0x0148
+   167 00000068 744C                        je   .up
+   168 0000006A 3D5001                      cmp  ax, 0x0150
+   169 0000006D 745D                        je   .down
+   170 0000006F 83F80D                      cmp  ax, 0x000D
+   171 00000072 7472                        je   .enter
+   172 00000074 3D4401                      cmp  ax, 0x0144
+   173 00000077 0F848300                    je   .f10
+   174 0000007B 3D3C01                      cmp  ax, 0x013C
+   175 0000007E 0F848700                    je   .colour
+   176 00000082 3D3D01                      cmp  ax, 0x013D
+   177 00000085 0F848000                    je   .colour
+   178 00000089 EB96                        jmp  .loop
+   179                                  
+   180                                  .esc:
+   181 0000008B B005                        mov  al, NTABS-1               ; ESC on Summary -> Exit page
+   182 0000008D 803E80EF00                  cmp  byte [BU_TAB], 0
+   183 00000092 7402                        je   .set
+   184 00000094 30C0                        xor  al, al                    ; ESC elsewhere -> Summary
+   185                                  .set:
+   186 00000096 A280EF                      mov  [BU_TAB], al
+   187 00000099 C60682EF00                  mov  byte [BU_SEL], 0
+   188 0000009E EB81                        jmp  .loop
+   189                                  .next:
+   190 000000A0 B001                        mov  al, 1
+   191 000000A2 EB02                        jmp  .step
+   192                                  .prev:
+   193 000000A4 B0FF                        mov  al, -1
+   194                                  .step:
+   195 000000A6 020680EF                    add  al, [BU_TAB]
+   196 000000AA 7902                        jns  .s1
+   197 000000AC 0406                        add  al, NTABS
+   198                                  .s1:
+   199 000000AE 3C06                        cmp  al, NTABS
+   200 000000B0 72E4                        jb   .set
+   201 000000B2 2C06                        sub  al, NTABS
+   202 000000B4 EBE0                        jmp  .set
+   203                                  
+   204                                  .up:
+   205 000000B6 E85600                      call bu_list
+   206 000000B9 09C9                        or   cx, cx
+   207 000000BB 0F8462FF                    jz   .loop
+   208 000000BF A082EF                      mov  al, [BU_SEL]
+   209 000000C2 FEC8                        dec  al
+   210 000000C4 791A                        jns  .sel
+   211 000000C6 88C8                        mov  al, cl
+   212 000000C8 FEC8                        dec  al
+   213 000000CA EB14                        jmp  .sel
+   214                                  .down:
+   215 000000CC E84000                      call bu_list
+   216 000000CF 09C9                        or   cx, cx
+   217 000000D1 0F844CFF                    jz   .loop
+   218 000000D5 A082EF                      mov  al, [BU_SEL]
+   219 000000D8 FEC0                        inc  al
+   220 000000DA 38C8                        cmp  al, cl
+   221 000000DC 7202                        jb   .sel
+   222 000000DE 30C0                        xor  al, al
+   223                                  .sel:
+   224 000000E0 A282EF                      mov  [BU_SEL], al
+   225 000000E3 E93BFF                      jmp  .loop
+   226                                  
+   227                                  .enter:
+   228 000000E6 E82600                      call bu_list
+   229 000000E9 09C9                        or   cx, cx
+   230 000000EB 0F8432FF                    jz   .loop
+   231 000000EF E83A00                      call bu_item                   ; BX -> entry
+   232 000000F2 8A4704                      mov  al, [bx+4]
+   233 000000F5 A287E1                      mov  [V_ITEM], al
+   234 000000F8 FF5705                      call [bx+5]
+   235 000000FB E923FF                      jmp  .loop
+   236                                  
+   237                                  .f10:
+   238 000000FE C60687E10A                  mov  byte [V_ITEM], 10
+   239 00000103 E8(DD29)                    call A_SAVEEXIT                ; returns only if the answer was N
+   240 00000106 E918FF                      jmp  .loop
+   241                                  
+   242                                  .colour:
+   243 00000109 E8(BA50)                    call A_COLOUR
+   244 0000010C E912FF                      jmp  .loop
+   245                                  
+   246                                  ; ---------------------------------------------------------------------
+   247                                  ; bu_list: SI -> entry list of the current tab, CX = number of entries
+   248                                  ; bu_item: BX -> entry [BU_SEL] of list SI
+   249                                  ; ---------------------------------------------------------------------
+   250                                  bu_list:
+   251 0000010F 31C9                        xor  cx, cx
+   252 00000111 BE[D101]                    mov  si, tools_list
+   253 00000114 B104                        mov  cl, 4
+   254 00000116 803E80EF04                  cmp  byte [BU_TAB], 4
+   255 0000011B 740E                        je   .r
+   256 0000011D BE[ED01]                    mov  si, exit_list
+   257 00000120 B102                        mov  cl, 2
+   258 00000122 803E80EF05                  cmp  byte [BU_TAB], 5
+   259 00000127 7402                        je   .r
+   260 00000129 31C9                        xor  cx, cx
+   261 0000012B C3                      .r: ret
+   262                                  
+   263                                  bu_item:
+   264 0000012C A082EF                      mov  al, [BU_SEL]
+   265 0000012F B407                        mov  ah, ITEMSZ
+   266 00000131 F6E4                        mul  ah
+   267 00000133 89F3                        mov  bx, si
+   268 00000135 01C3                        add  bx, ax
+   269 00000137 C3                          ret
+   270                                  
+   271                                  ; ---------------------------------------------------------------------
+   272                                  ; bu_hdr -- replaces the AMI screen header (0x38B5).
+   273                                  ;   In: AX = footer caption (row 24), BX = page title (unused: the
+   274                                  ;       active tab names the page).  All registers preserved.
+   275                                  ; ---------------------------------------------------------------------
+   276                                  bu_hdr:
+   277 00000138 60                          pusha
+   278 00000139 50                          push ax
+   279 0000013A A0A8E1                      mov  al, [C_HDR]
+   280 0000013D A29FE1                      mov  [V_ATTR], al
+   281 00000140 31C0                        xor  ax, ax                    ; row 0: title bar
+   282 00000142 BA4F00                      mov  dx, 0x004F
+   283 00000145 E8(0E52)                    call A_FILL
+   284 00000148 BB[C602]                    mov  bx, s_title
+   285 0000014B 31C0                        xor  ax, ax                    ; row 0, column 0
+   286 0000014D E8(BB52)                    call A_PRINTB
+   287 00000150 B80001                      mov  ax, 0x0100                ; frame rows 1..24
+   288 00000153 BA4F18                      mov  dx, 0x184F
+   289 00000156 BB0300                      mov  bx, 3
+   290 00000159 E8(9951)                    call A_BOX
+   291 0000015C B80003                      mov  ax, 0x0300                ; separator under the tab bar
+   292 0000015F B250                        mov  dl, 0x50
+   293 00000161 BB1720                      mov  bx, 0x2017
+   294 00000164 E8(6E52)                    call A_HLINE
+   295                                      ; tab bar (row 2)
+   296 00000167 BE[BF01]                    mov  si, tab_table
+   297 0000016A 31C9                        xor  cx, cx
+   298                                  .tab:
+   299 0000016C A0A8E1                      mov  al, [C_HDR]
+   300 0000016F 3A0E80EF                    cmp  cl, [BU_TAB]
+   301 00000173 7503                        jne  .t1
+   302 00000175 E82E00                      call bu_tabattr
+   303                                  .t1:
+   304 00000178 A29FE1                      mov  [V_ATTR], al
+   305 0000017B AC                          lodsb                          ; column
+   306 0000017C B402                        mov  ah, 2
+   307 0000017E 8B1C                        mov  bx, [si]
+   308 00000180 83C602                      add  si, 2
+   309 00000183 51                          push cx
+   310 00000184 E8(DF52)                    call A_PRINT
+   311 00000187 59                          pop  cx
+   312 00000188 41                          inc  cx
+   313 00000189 83F906                      cmp  cx, NTABS
+   314 0000018C 72DE                        jb   .tab
+   315                                      ; footer and content area
+   316 0000018E 5B                          pop  bx
+   317 0000018F B82818                      mov  ax, 0x1828
+   318 00000192 E8(0F39)                    call A_FOOTER
+   319 00000195 A0A2E1                      mov  al, [C_CONTENT]
+   320 00000198 A29FE1                      mov  [V_ATTR], al
+   321 0000019B B80104                      mov  ax, 0x0401
+   322 0000019E BA4E17                      mov  dx, 0x174E
+   323 000001A1 E8(0E52)                    call A_FILL
+   324 000001A4 61                          popa
+   325 000001A5 C3                          ret
+   326                                  
+   327                                  ; active-tab attribute: one per colour scheme, inverse video on mono
+   328                                  bu_tabattr:
+   329 000001A6 B070                        mov  al, 0x70
+   330 000001A8 813EF44F00B0                cmp  word [AMI_VIDSEG], 0xB000
+   331 000001AE 740B                        je   .r
+   332 000001B0 8A1E37E0                    mov  bl, [CMOS+0x37]
+   333 000001B4 83E30F                      and  bx, 0x000F
+   334 000001B7 8A87[B602]                  mov  al, [bx+tab_attrs]
+   335 000001BB C3                      .r: ret
+   336                                  
+   337                                  ; ---------------------------------------------------------------------
+   338                                  ; bu_draw_page -- Summary / Tools / Exit pages
+   339                                  ; ---------------------------------------------------------------------
+   340                                  bu_draw_page:
+   341 000001BC 31DB                        xor  bx, bx
+   342 000001BE B8[4F03]                    mov  ax, s_foot_main
+   343 000001C1 E874FF                      call bu_hdr
+   344 000001C4 A0A8E1                      mov  al, [C_HDR]
+   345 000001C7 A29FE1                      mov  [V_ATTR], al
+   346 000001CA B80016                      mov  ax, 0x1600                ; line above the help row
+   347 000001CD B250                        mov  dl, 0x50
+   348 000001CF BB1720                      mov  bx, 0x2017
+   349 000001D2 E8(6E52)                    call A_HLINE
+   350 000001D5 803E80EF00                  cmp  byte [BU_TAB], 0
+   351 000001DA 745D                        je   bu_summary
+   352                                      ; ---- list page ----
+   353 000001DC E830FF                      call bu_list
+   354 000001DF E357                        jcxz .done
+   355 000001E1 31DB                        xor  bx, bx                    ; bl = index
+   356 000001E3 B607                        mov  dh, 7                     ; first row
+   357                                  .item:
+   358 000001E5 51                          push cx
+   359 000001E6 56                          push si
+   360 000001E7 53                          push bx
+   361 000001E8 52                          push dx
+   362 000001E9 A0A2E1                      mov  al, [C_CONTENT]
+   363 000001EC 3A1E82EF                    cmp  bl, [BU_SEL]
+   364 000001F0 7503                        jne  .a
+   365 000001F2 A0A3E1                      mov  al, [C_SEL]
+   366 000001F5 A29FE1                  .a: mov  [V_ATTR], al
+   367 000001F8 88F4                        mov  ah, dh                    ; selection bar, columns 22..57
+   368 000001FA B016                        mov  al, 22
+   369 000001FC B239                        mov  dl, 57
+   370 000001FE E8(0E52)                    call A_FILL
+   371 00000201 5A                          pop  dx
+   372 00000202 5B                          pop  bx
+   373 00000203 53                          push bx
+   374 00000204 52                          push dx
+   375 00000205 88D8                        mov  al, bl
+   376 00000207 B407                        mov  ah, ITEMSZ
+   377 00000209 F6E4                        mul  ah
+   378 0000020B 89F3                        mov  bx, si
+   379 0000020D 01C3                        add  bx, ax
+   380 0000020F 8B1F                        mov  bx, [bx]                  ; label
+   381 00000211 88F4                        mov  ah, dh
+   382 00000213 B018                        mov  al, 24
+   383 00000215 E8(DF52)                    call A_PRINT
+   384 00000218 5A                          pop  dx
+   385 00000219 5B                          pop  bx
+   386 0000021A 5E                          pop  si
+   387 0000021B 59                          pop  cx
+   388 0000021C 80C602                      add  dh, 2
+   389 0000021F FEC3                        inc  bl
+   390 00000221 E2C2                        loop .item
+   391                                      ; help text of the selected entry, row 23
+   392 00000223 E8E9FE                      call bu_list
+   393 00000226 E803FF                      call bu_item
+   394 00000229 A0A2E1                      mov  al, [C_CONTENT]
+   395 0000022C A29FE1                      mov  [V_ATTR], al
+   396 0000022F 8B5F02                      mov  bx, [bx+2]
+   397 00000232 B82817                      mov  ax, 0x1728
+   398 00000235 E8(D252)                    call A_PRINTC
+   399                                  .done:
+   400 00000238 C3                          ret
+   401                                  
+   402                                  ; ---------------------------------------------------------------------
+   403                                  ; bu_summary -- the entry page
+   404                                  ; ---------------------------------------------------------------------
+   405                                  bu_summary:
+   406 00000239 B82703                      mov  ax, 0x0327                ; column divider rows 3..22
+   407 0000023C B214                        mov  dl, 0x14
+   408 0000023E BB8B40                      mov  bx, 0x408B
+   409 00000241 E8(8652)                    call A_VLINE
+   410 00000244 A0A2E1                      mov  al, [C_CONTENT]
+   411 00000247 A29FE1                      mov  [V_ATTR], al
+   412 0000024A BB[A403]                    mov  bx, s_tagline
+   413 0000024D B82817                      mov  ax, 0x1728
+   414 00000250 E8(D252)                    call A_PRINTC
+   415 00000253 BE[FB01]                    mov  si, sum_table
+   416                                  .e:
+   417 00000256 AC                          lodsb
+   418 00000257 3CFF                        cmp  al, 0xFF
+   419 00000259 744F                        je   .done
+   420 0000025B 88C6                        mov  dh, al                    ; row
+   421 0000025D AC                          lodsb
+   422 0000025E 88C2                        mov  dl, al                    ; column
+   423 00000260 AD                          lodsw
+   424 00000261 89C7                        mov  di, ax                    ; label
+   425 00000263 AD                          lodsw                          ; value descriptor
+   426 00000264 56                          push si
+   427 00000265 52                          push dx
+   428 00000266 57                          push di
+   429 00000267 55                          push bp
+   430 00000268 E85000                      call bu_value                  ; BX = value string or 0
+   431 0000026B 5D                          pop  bp
+   432 0000026C 5F                          pop  di
+   433 0000026D 5A                          pop  dx
+   434 0000026E 09DB                        or   bx, bx
+   435 00000270 7435                        jz   .skip
+   436 00000272 53                          push bx
+   437 00000273 A0A2E1                      mov  al, [C_CONTENT]
+   438 00000276 A29FE1                      mov  [V_ATTR], al
+   439 00000279 89FB                        mov  bx, di
+   440 0000027B 89D0                        mov  ax, dx
+   441 0000027D E8(DF52)                    call A_PRINT
+   442                                      ; dotted leader
+   443 00000280 89FB                        mov  bx, di
+   444 00000282 E82600                      call A_STRLEN_wrap             ; CX = label length
+   445 00000285 52                          push dx
+   446 00000286 00CA                        add  dl, cl
+   447 00000288 FEC2                        inc  dl                        ; first dot column
+   448 0000028A B91200                      mov  cx, LBLW
+   449 0000028D 28C1                        sub  cl, al                    ; (AL = label length)
+   450 0000028F 49                          dec  cx
+   451                                  .dot:
+   452 00000290 E30C                        jcxz .dd
+   453 00000292 B0FA                        mov  al, 0xFA                  ; middle dot
+   454 00000294 51                          push cx
+   455 00000295 E8(FA52)                    call A_PUTCH
+   456 00000298 59                          pop  cx
+   457 00000299 FEC2                        inc  dl
+   458 0000029B 49                          dec  cx
+   459 0000029C EBF2                        jmp  .dot
+   460                                  .dd:
+   461 0000029E 5A                          pop  dx
+   462 0000029F 5B                          pop  bx
+   463 000002A0 89D0                        mov  ax, dx
+   464 000002A2 0413                        add  al, LBLW+1
+   465 000002A4 E8(BB52)                    call A_PRINTB
+   466                                  .skip:
+   467 000002A7 5E                          pop  si
+   468 000002A8 EBAC                        jmp  .e
+   469                                  .done:
+   470 000002AA C3                          ret
+   471                                  
+   472                                  ; label length helper: BX = string -> AX = CX = length (BX preserved)
+   473                                  A_STRLEN_wrap:
+   474 000002AB 53                          push bx
+   475 000002AC 31C9                        xor  cx, cx
+   476 000002AE 803F00                  .l: cmp  byte [bx], 0
+   477 000002B1 7404                        je   .r
+   478 000002B3 43                          inc  bx
+   479 000002B4 41                          inc  cx
+   480 000002B5 EBF7                        jmp  .l
+   481 000002B7 89C8                    .r: mov  ax, cx
+   482 000002B9 5B                          pop  bx
+   483 000002BA C3                          ret
+   484                                  
+   485                                  ; ---------------------------------------------------------------------
+   486                                  ; bu_value -- AX = value descriptor -> BX = string (0 = hide line)
+   487                                  ;   < 8000h        : DS string
+   488                                  ;   B000h..CFFFh   : AMI option record -> its current value text
+   489                                  ;   >= D000h       : routine that returns BX
+   490                                  ; ---------------------------------------------------------------------
+   491                                  bu_value:
+   492 000002BB 89C3                        mov  bx, ax
+   493 000002BD 3D0080                      cmp  ax, 0x8000
+   494 000002C0 7213                        jb   .r
+   495 000002C2 3D00D0                      cmp  ax, 0xD000
+   496 000002C5 730F                        jae  .fn
+   497 000002C7 A38FE1                      mov  [V_REC], ax
+   498 000002CA A19282                      mov  ax, [AMI_VSTR]
+   499 000002CD A397E1                      mov  [V_VSTR], ax
+   500 000002D0 E8(215B)                    call A_VALSTR
+   501 000002D3 89C3                        mov  bx, ax
+   502 000002D5 C3                      .r: ret
+   503                                  .fn:
+   504 000002D6 FFE0                        jmp  ax
+   505                                  
+   506                                  ; ---------------------------------------------------------------------
+   507                                  ; text buffer helpers (DS:DI)
+   508                                  ; ---------------------------------------------------------------------
+   509                                  buf_begin:
+   510 000002D8 BF90EF                      mov  di, BU_BUF
+   511 000002DB C3                          ret
+   512                                  buf_end:
+   513 000002DC C60500                      mov  byte [di], 0
+   514 000002DF BB90EF                      mov  bx, BU_BUF
+   515 000002E2 C3                          ret
+   516                                  put_ch:
+   517 000002E3 8805                        mov  [di], al
+   518 000002E5 47                          inc  di
+   519 000002E6 C3                          ret
+   520                                  put_str:                           ; DS:SI
+   521 000002E7 AC                          lodsb
+   522 000002E8 08C0                        or   al, al
+   523 000002EA 7405                        jz   .r
+   524 000002EC E8F4FF                      call put_ch
+   525 000002EF EBF6                        jmp  put_str
+   526 000002F1 C3                      .r: ret
+   527                                  put_num:                           ; EAX unsigned decimal
+   528 000002F2 31C9                        xor  cx, cx
+   529 000002F4 66BB0A000000                mov  ebx, 10
+   530 000002FA 6631D2                  .d: xor  edx, edx
+   531 000002FD 66F7F3                      div  ebx
+   532 00000300 52                          push dx
+   533 00000301 41                          inc  cx
+   534 00000302 6609C0                      or   eax, eax
+   535 00000305 75F3                        jnz  .d
+   536 00000307 58                      .o: pop  ax
+   537 00000308 0430                        add  al, '0'
+   538 0000030A E8D6FF                      call put_ch
+   539 0000030D E2F8                        loop .o
+   540 0000030F C3                          ret
+   541                                  put_chs:                           ; CX / BL / BH
+   542 00000310 53                          push bx
+   543 00000311 660FB7C1                    movzx eax, cx
+   544 00000315 E8DAFF                      call put_num
+   545 00000318 B02F                        mov  al, '/'
+   546 0000031A E8C6FF                      call put_ch
+   547 0000031D 5B                          pop  bx
+   548 0000031E 53                          push bx
+   549 0000031F 660FB6C3                    movzx eax, bl
+   550 00000323 E8CCFF                      call put_num
+   551 00000326 B02F                        mov  al, '/'
+   552 00000328 E8B8FF                      call put_ch
+   553 0000032B 5B                          pop  bx
+   554 0000032C 660FB6C7                    movzx eax, bh
+   555 00000330 EBC0                        jmp  put_num
+   556                                  num_k:                             ; AX -> "nnnnK"
+   557 00000332 660FB7C0                    movzx eax, ax
+   558 00000336 E89FFF                      call buf_begin
+   559 00000339 E8B6FF                      call put_num
+   560 0000033C B04B                        mov  al, 'K'
+   561 0000033E E8A2FF                      call put_ch
+   562 00000341 EB99                        jmp  buf_end
+   563                                  
+   564                                  ; ---------------------------------------------------------------------
+   565                                  ; Summary value routines (return BX)
+   566                                  ; ---------------------------------------------------------------------
+   567                                  f_cpu:
+   568 00000343 8A1E86EF                    mov  bl, [BU_CPU]
+   569 00000347 80FB06                      cmp  bl, 6
+   570 0000034A 7602                        jbe  .ok
+   571 0000034C B306                        mov  bl, 6
+   572                                  .ok:
+   573 0000034E 80EB03                      sub  bl, 3
+   574 00000351 30FF                        xor  bh, bh
+   575 00000353 D1E3                        shl  bx, 1
+   576 00000355 8B9F[8C02]                  mov  bx, [bx+cpu_names]
+   577 00000359 C3                          ret
+   578                                  
+   579                                  f_mhz:
+   580 0000035A E87BFF                      call buf_begin
+   581 0000035D 660FB70684EF                movzx eax, word [BU_MHZ]
+   582 00000363 6631D2                      xor  edx, edx
+   583 00000366 66BB0A000000                mov  ebx, 10
+   584 0000036C 66F7F3                      div  ebx
+   585 0000036F 52                          push dx
+   586 00000370 E87FFF                      call put_num
+   587 00000373 B02E                        mov  al, '.'
+   588 00000375 E86BFF                      call put_ch
+   589 00000378 58                          pop  ax
+   590 00000379 0430                        add  al, '0'
+   591 0000037B E865FF                      call put_ch
+   592 0000037E BE[AA05]                    mov  si, s_mhz
+   593 00000381 E863FF                      call put_str
+   594 00000384 E955FF                      jmp  buf_end
+   595                                  
+   596                                  f_fpu:
+   597 00000387 BB[AF05]                    mov  bx, s_present
+   598 0000038A 803E87EF00                  cmp  byte [BU_FPU], 0
+   599 0000038F 7503                        jne  .r
+   600 00000391 BB[B705]                    mov  bx, s_none
+   601 00000394 C3                      .r: ret
+   602                                  
+   603                                  f_base:
+   604 00000395 1E                          push ds
+   605 00000396 31C0                        xor  ax, ax
+   606 00000398 8ED8                        mov  ds, ax
+   607 0000039A A11304                      mov  ax, [0x413]
+   608 0000039D 1F                          pop  ds
+   609 0000039E EB92                        jmp  num_k
+   610                                  
+   611                                  ext_kb:
+   612 000003A0 B488                        mov  ah, 0x88
+   613 000003A2 CD15                        int  0x15
+   614 000003A4 7303                        jnc  .r
+   615 000003A6 A117E0                      mov  ax, [CMOS+0x17]
+   616 000003A9 C3                      .r: ret
+   617                                  f_ext:
+   618 000003AA E8F3FF                      call ext_kb
+   619 000003AD EB83                        jmp  num_k
+   620                                  f_total:
+   621 000003AF E8EEFF                      call ext_kb
+   622 000003B2 050004                      add  ax, 1024
+   623 000003B5 E97AFF                      jmp  num_k
+   624                                  
+   625                                  f_fda:
+   626 000003B8 A010E0                      mov  al, [CMOS+0x10]
+   627 000003BB C0E804                      shr  al, 4
+   628 000003BE EB05                        jmp  floppy
+   629                                  f_fdb:
+   630 000003C0 A010E0                      mov  al, [CMOS+0x10]
+   631 000003C3 240F                        and  al, 0x0F
+   632                                  floppy:
+   633 000003C5 BB[B705]                    mov  bx, s_none
+   634 000003C8 08C0                        or   al, al
+   635 000003CA 740F                        jz   .r
+   636 000003CC 3C05                        cmp  al, 5
+   637 000003CE 770B                        ja   .r
+   638 000003D0 FEC8                        dec  al
+   639 000003D2 B411                        mov  ah, 17
+   640 000003D4 F6E4                        mul  ah
+   641 000003D6 05356F                      add  ax, S_FLOPPY
+   642 000003D9 89C3                        mov  bx, ax
+   643 000003DB C3                      .r: ret
+   644                                  
+   645                                  f_video:
+   646 000003DC 8A1E14E0                    mov  bl, [CMOS+0x14]
+   647 000003E0 C0EB03                      shr  bl, 3
+   648 000003E3 83E306                      and  bx, 0x0006
+   649 000003E6 8B9F[AE02]                  mov  bx, [bx+video_names]
+   650 000003EA C3                          ret
+   651                                  
+   652                                  ; ---- hard disks --------------------------------------------------------
+   653                                  ; drv_get: DL = 0 (C:) / 1 (D:)
+   654                                  ;   -> CF=1 not installed, else AL=type CX=cyl BL=heads BH=sectors
+   655                                  drv_get:
+   656 000003EB A012E0                      mov  al, [CMOS+0x12]
+   657 000003EE 08D2                        or   dl, dl
+   658 000003F0 7505                        jnz  .d
+   659 000003F2 C0E804                      shr  al, 4
+   660 000003F5 EB02                        jmp  .t
+   661 000003F7 240F                    .d: and  al, 0x0F
+   662 000003F9 3C0F                    .t: cmp  al, 0x0F
+   663 000003FB 7508                        jne  .h
+   664 000003FD 31DB                        xor  bx, bx
+   665 000003FF 88D3                        mov  bl, dl
+   666 00000401 8A8719E0                    mov  al, [bx+CMOS+0x19]
+   667 00000405 08C0                    .h: or   al, al
+   668 00000407 7440                        jz   .none
+   669 00000409 3C2F                        cmp  al, 47
+   670 0000040B 7514                        jne  .rom
+   671 0000040D BE1BE0                      mov  si, CMOS+0x1B
+   672 00000410 08D2                        or   dl, dl
+   673 00000412 7403                        jz   .c
+   674 00000414 83C609                      add  si, 9
+   675 00000417 8B0C                    .c: mov  cx, [si]
+   676 00000419 8A5C02                      mov  bl, [si+2]
+   677 0000041C 8A7C08                      mov  bh, [si+8]
+   678 0000041F EB1A                        jmp  .chk
+   679                                  .rom:
+   680 00000421 3C2E                        cmp  al, 46
+   681 00000423 7724                        ja   .none
+   682 00000425 50                          push ax
+   683 00000426 B410                        mov  ah, 16
+   684 00000428 F6E4                        mul  ah
+   685 0000042A 05F1E3                      add  ax, 0xE3F1                ; ROM drive table, entry 1 at E401
+   686 0000042D 89C6                        mov  si, ax
+   687 0000042F 58                          pop  ax
+   688 00000430 2E8B0C                      mov  cx, [cs:si]
+   689 00000433 2E8A5C02                    mov  bl, [cs:si+2]
+   690 00000437 2E8A7C0E                    mov  bh, [cs:si+0x0E]
+   691                                  .chk:
+   692 0000043B 09C9                        or   cx, cx                    ; reject empty / corrupt parameters
+   693 0000043D 740A                        jz   .none
+   694 0000043F 08DB                        or   bl, bl
+   695 00000441 7406                        jz   .none
+   696 00000443 08FF                        or   bh, bh
+   697 00000445 7402                        jz   .none
+   698 00000447 F8                          clc
+   699 00000448 C3                          ret
+   700                                  .none:
+   701 00000449 F9                          stc
+   702 0000044A C3                          ret
+   703                                  
+   704                                  f_c0:
+   705 0000044B 30D2                        xor  dl, dl
+   706 0000044D EB02                        jmp  drv_size
+   707                                  f_d0:
+   708 0000044F B201                        mov  dl, 1
+   709                                  drv_size:
+   710 00000451 E897FF                      call drv_get
+   711 00000454 7304                        jnc  .ok
+   712 00000456 BB[B705]                    mov  bx, s_none
+   713 00000459 C3                          ret
+   714                                  .ok:
+   715 0000045A 50                          push ax
+   716 0000045B 660FB7C1                    movzx eax, cx
+   717 0000045F 660FB6CB                    movzx ecx, bl
+   718 00000463 66F7E1                      mul  ecx
+   719 00000466 660FB6CF                    movzx ecx, bh
+   720 0000046A 66F7E1                      mul  ecx
+   721 0000046D 66C1E80B                    shr  eax, 11                   ; bytes/512/2048 -> MB
+   722 00000471 E864FE                      call buf_begin
+   723 00000474 E87BFE                      call put_num
+   724 00000477 BE[C705]                    mov  si, s_mb_type
+   725 0000047A E86AFE                      call put_str
+   726 0000047D 58                          pop  ax
+   727 0000047E 660FB6C0                    movzx eax, al
+   728 00000482 E86DFE                      call put_num
+   729 00000485 B05D                        mov  al, ']'
+   730 00000487 E859FE                      call put_ch
+   731 0000048A E94FFE                      jmp  buf_end
+   732                                  
+   733                                  f_c1:
+   734 0000048D 30D2                        xor  dl, dl
+   735 0000048F EB02                        jmp  drv_phys
+   736                                  f_d1:
+   737 00000491 B201                        mov  dl, 1
+   738                                  drv_phys:
+   739 00000493 E855FF                      call drv_get
+   740 00000496 7209                        jc   drv_none
+   741 00000498 E83DFE                      call buf_begin
+   742 0000049B E872FE                      call put_chs
+   743 0000049E E93BFE                      jmp  buf_end
+   744                                  drv_none:
+   745 000004A1 31DB                        xor  bx, bx
+   746 000004A3 C3                          ret
+   747                                  
+   748                                  f_c2:
+   749 000004A4 30D2                        xor  dl, dl
+   750 000004A6 EB02                        jmp  drv_log
+   751                                  f_d2:
+   752 000004A8 B201                        mov  dl, 1
+   753                                  drv_log:
+   754 000004AA E83EFF                      call drv_get
+   755 000004AD 72F2                        jc   drv_none
+   756 000004AF 81F90004                    cmp  cx, 1024
+   757 000004B3 7704                        ja   .xl
+   758 000004B5 BB[BC05]                    mov  bx, s_notrans
+   759 000004B8 C3                          ret
+   760                                  .xl:
+   761 000004B9 89DE                        mov  si, bx                    ; SI: heads / sectors
+   762 000004BB 89C8                        mov  ax, cx
+   763 000004BD 50                          push ax
+   764 000004BE 31C9                        xor  cx, cx
+   765 000004C0 88D9                        mov  cl, bl
+   766 000004C2 E8(F576)                    call CALC_FACTOR               ; AX = translated heads (CX kept)
+   767 000004C5 89C5                        mov  bp, ax
+   768 000004C7 58                          pop  ax
+   769 000004C8 F7E1                        mul  cx                        ; DX:AX = cyl * heads
+   770 000004CA F7F5                        div  bp
+   771 000004CC 48                          dec  ax                        ; cylinders DOS sees (AH=08h convention)
+   772 000004CD 3D0004                      cmp  ax, 1024
+   773 000004D0 7603                        jbe  .ok
+   774 000004D2 B80004                      mov  ax, 1024
+   775                                  .ok:
+   776 000004D5 89C1                        mov  cx, ax
+   777 000004D7 89F3                        mov  bx, si
+   778 000004D9 89E8                        mov  ax, bp
+   779 000004DB 88C3                        mov  bl, al
+   780 000004DD E8F8FD                      call buf_begin
+   781 000004E0 E82DFE                      call put_chs
+   782 000004E3 E9F6FD                      jmp  buf_end
+   783                                  
+   784                                  ; BX in 1..AH ? -> AL = BCD(BX), CF=0 ; else CF=1
+   785                                  dt_range1:
+   786 000004E6 09DB                        or   bx, bx
+   787 000004E8 740F                        jz   .bad
+   788 000004EA 38E3                        cmp  bl, ah
+   789 000004EC 770B                        ja   .bad
+   790 000004EE 08FF                        or   bh, bh
+   791 000004F0 7507                        jnz  .bad
+   792 000004F2 88D8                        mov  al, bl
+   793 000004F4 E80400                      call dt_bcd
+   794 000004F7 F8                          clc
+   795 000004F8 C3                          ret
+   796                                  .bad:
+   797 000004F9 F9                          stc
+   798 000004FA C3                          ret
+   799                                  
+   800                                  ; AL (0..99) -> packed BCD
+   801                                  dt_bcd:
+   802 000004FB D40A                        aam
+   803 000004FD C0E404                      shl  ah, 4
+   804 00000500 08E0                        or   al, ah
+   805 00000502 C3                          ret
+   806                                  
+   807                                  code_end:
+   808                                  
+   809                                  ; =====================================================================
+   810                                  section data start=0x800 vstart=0x7902
+   811                                  ; =====================================================================
+   812                                  
+   813                                  ; timing loop -- far-called at 0100:bu_tloop (RAM copy of this block)
+   814                                  bu_tloop:
+   815 00000000 B9D007                      mov  cx, 2000
+   816 00000003 BB0100                      mov  bx, 1
+   817 00000006 31D2                        xor  dx, dx
+   818 00000008 B83412                      mov  ax, 0x1234
+   819 0000000B F7F3                    .l: div  bx
+   820 0000000D F7F3                        div  bx
+   821 0000000F F7F3                        div  bx
+   822 00000011 F7F3                        div  bx
+   823 00000013 F7F3                        div  bx
+   824 00000015 F7F3                        div  bx
+   825 00000017 F7F3                        div  bx
+   826 00000019 F7F3                        div  bx
+   827 0000001B E2EE                        loop .l
+   828 0000001D CB                          retf
+   829                                  bu_tloop_end:
+   830                                  
+   831                                  ; (code that does not need to sit above D000h lives here too)
+   832                                  ; ---------------------------------------------------------------------
+   833                                  ; Tab / Shift-Tab inside the AMI pages: remember the direction and hand
+   834                                  ; the page an ESC so it closes normally; bu_main then opens the next tab.
+   835                                  ; ---------------------------------------------------------------------
+   836                                  bu_edkey:                          ; replaces CALL 530E at 0x0D3D
+   837 0000001E E8(0E53)                    call A_GETKEY
+   838 00000021 83F809                      cmp  ax, 0x0009
+   839 00000024 740C                        je   .fwd
+   840 00000026 3D0F01                      cmp  ax, 0x010F
+   841 00000029 750F                        jne  .r
+   842 0000002B C60681EFFF                  mov  byte [BU_PEND], -1
+   843 00000030 EB05                        jmp  .esc
+   844                                  .fwd:
+   845 00000032 C60681EF01                  mov  byte [BU_PEND], 1
+   846                                  .esc:
+   847 00000037 B81B00                      mov  ax, 0x001B
+   848 0000003A C3                      .r: ret
+   849                                  
+   850                                  bu_stdkey:                         ; replaces MOV AH,0 / INT 16h at 0x08D5
+   851 0000003B B400                        mov  ah, 0
+   852 0000003D CD16                        int  0x16
+   853 0000003F 833E88EF00                  cmp  word [BU_DTPOS], 0        ; inside a date/time field?
+   854 00000044 740B                        je   .tab
+   855 00000046 3C30                        cmp  al, '0'
+   856 00000048 7207                        jb   .tab
+   857 0000004A 3C39                        cmp  al, '9'
+   858 0000004C 7703                        ja   .tab
+   859 0000004E E8(0000)                    call bu_dtentry                ; AX = key that ended the entry
+   860                                  .tab:
+   861 00000051 3D090F                      cmp  ax, 0x0F09
+   862 00000054 740C                        je   .fwd
+   863 00000056 3D000F                      cmp  ax, 0x0F00
+   864 00000059 750F                        jne  .r
+   865 0000005B C60681EFFF                  mov  byte [BU_PEND], -1
+   866 00000060 EB05                        jmp  .esc
+   867                                  .fwd:
+   868 00000062 C60681EF01                  mov  byte [BU_PEND], 1
+   869                                  .esc:
+   870 00000067 B81B01                      mov  ax, 0x011B
+   871 0000006A C3                      .r: ret
+   872                                  
+   873                                  bu_dtkey:                          ; replaces CALL 08CDh at 0x5F94 (date/time fields)
+   874 0000006B 891688EF                    mov  [BU_DTPOS], dx
+   875 0000006F 880E8AEF                    mov  [BU_DTW], cl
+   876 00000073 E8(CD08)                    call A_STDKEY
+   877 00000076 C70688EF0000                mov  word [BU_DTPOS], 0        ; MOV keeps the navigation flags
+   878 0000007C C3                          ret
+   879                                  
+   880                                  ; ---------------------------------------------------------------------
+   881                                  ; bu_detect -- CPU family and clock, measured once on setup entry
+   882                                  ; ---------------------------------------------------------------------
+   883                                  bu_detect:
+   884 0000007D 6660                        pushad
+   885 0000007F C60686EF03                  mov  byte [BU_CPU], 3
+   886 00000084 669C                        pushfd
+   887 00000086 6658                        pop  eax
+   888 00000088 6689C1                      mov  ecx, eax
+   889 0000008B 663500000400                xor  eax, 0x40000              ; AC flag: only 486+ can toggle it
+   890 00000091 6650                        push eax
+   891 00000093 669D                        popfd
+   892 00000095 669C                        pushfd
+   893 00000097 6658                        pop  eax
+   894 00000099 6651                        push ecx
+   895 0000009B 669D                        popfd
+   896 0000009D 6631C8                      xor  eax, ecx
+   897 000000A0 66A900000400                test eax, 0x40000
+   898 000000A6 7435                        jz   .clock
+   899 000000A8 C60686EF04                  mov  byte [BU_CPU], 4
+   900 000000AD 6689C8                      mov  eax, ecx
+   901 000000B0 663500002000                xor  eax, 0x200000             ; ID flag -> CPUID available
+   902 000000B6 6650                        push eax
+   903 000000B8 669D                        popfd
+   904 000000BA 669C                        pushfd
+   905 000000BC 6658                        pop  eax
+   906 000000BE 6651                        push ecx
+   907 000000C0 669D                        popfd
+   908 000000C2 6631C8                      xor  eax, ecx
+   909 000000C5 66A900002000                test eax, 0x200000
+   910 000000CB 7410                        jz   .clock
+   911 000000CD 66B801000000                mov  eax, 1
+   912 000000D3 0FA2                        db   0x0F, 0xA2                ; CPUID
+   913 000000D5 C1E808                      shr  ax, 8
+   914 000000D8 240F                        and  al, 0x0F
+   915 000000DA A286EF                      mov  [BU_CPU], al
+   916                                  .clock:
+   917                                      ; numeric coprocessor: FNINIT/FNSTSW/FNSTCW probe with CR0.EM/TS clear
+   918                                      ; (the BDA equipment bit is not final yet when setup runs from POST)
+   919 000000DD 0F20C0                      mov  eax, cr0
+   920 000000E0 6650                        push eax
+   921 000000E2 24F3                        and  al, 0xF3
+   922 000000E4 0F22C0                      mov  cr0, eax
+   923 000000E7 DBE3                        fninit
+   924 000000E9 C70690EF5A5A                mov  word [BU_BUF], 0x5A5A
+   925 000000EF DD3E90EF                    fnstsw [BU_BUF]
+   926 000000F3 803E90EF00                  cmp  byte [BU_BUF], 0
+   927 000000F8 7514                        jne  .nofpu
+   928 000000FA D93E90EF                    fnstcw [BU_BUF]
+   929 000000FE A190EF                      mov  ax, [BU_BUF]
+   930 00000101 253F10                      and  ax, 0x103F
+   931 00000104 83F83F                      cmp  ax, 0x003F
+   932 00000107 7505                        jne  .nofpu
+   933 00000109 C60687EF01                  mov  byte [BU_FPU], 1
+   934                                  .nofpu:
+   935 0000010E 6658                        pop  eax
+   936 00000110 0F22C0                      mov  cr0, eax
+   937                                      ; PIT channel 2, mode 0, count FFFFh, gated by port 61h bit 0
+   938 00000113 FA                          cli
+   939 00000114 E461                        in   al, 0x61
+   940 00000116 50                          push ax
+   941 00000117 24FC                        and  al, 0xFC
+   942 00000119 E661                        out  0x61, al
+   943 0000011B B0B0                        mov  al, 0xB0
+   944 0000011D E643                        out  0x43, al
+   945 0000011F B0FF                        mov  al, 0xFF
+   946 00000121 E642                        out  0x42, al
+   947 00000123 E642                        out  0x42, al
+   948 00000125 E461                        in   al, 0x61
+   949 00000127 0C01                        or   al, 1
+   950 00000129 E661                        out  0x61, al
+   951 0000012B 9A[0000]0001                call 0x0100:bu_tloop           ; runs from the setup's RAM copy
+   952 00000130 B080                        mov  al, 0x80                  ; latch channel 2
+   953 00000132 E643                        out  0x43, al
+   954 00000134 E442                        in   al, 0x42
+   955 00000136 88C4                        mov  ah, al
+   956 00000138 E442                        in   al, 0x42
+   957 0000013A 86C4                        xchg al, ah
+   958 0000013C F7D0                        not  ax                        ; elapsed PIT ticks
+   959 0000013E 89C3                        mov  bx, ax
+   960 00000140 58                          pop  ax
+   961 00000141 E661                        out  0x61, al
+   962 00000143 FB                          sti
+   963                                      ; MHz*10 = K[cpu] / ticks
+   964 00000144 31F6                        xor  si, si
+   965 00000146 A086EF                      mov  al, [BU_CPU]
+   966 00000149 3C04                        cmp  al, 4
+   967 0000014B 7208                        jb   .k
+   968 0000014D BE0400                      mov  si, 4
+   969 00000150 7403                        je   .k
+   970 00000152 BE0800                      mov  si, 8
+   971 00000155 668B84[8B01]            .k: mov  eax, [si+clock_k]
+   972 0000015A 6631D2                      xor  edx, edx
+   973 0000015D 660FB7DB                    movzx ebx, bx
+   974 00000161 09DB                        or   bx, bx
+   975 00000163 7423                        jz   .done
+   976 00000165 66F7F3                      div  ebx
+   977                                      ; snap to the nearest standard clock within 1/16
+   978 00000168 BE[9701]                    mov  si, clock_std
+   979                                  .sn:
+   980 0000016B 8B0C                        mov  cx, [si]
+   981 0000016D E316                        jcxz .store
+   982 0000016F 83C602                      add  si, 2
+   983 00000172 89C2                        mov  dx, ax
+   984 00000174 29CA                        sub  dx, cx
+   985 00000176 7902                        jns  .abs
+   986 00000178 F7DA                        neg  dx
+   987                                  .abs:
+   988 0000017A 89CB                        mov  bx, cx
+   989 0000017C C1EB04                      shr  bx, 4
+   990 0000017F 39DA                        cmp  dx, bx
+   991 00000181 77E8                        ja   .sn
+   992 00000183 89C8                        mov  ax, cx
+   993                                  .store:
+   994 00000185 A384EF                      mov  [BU_MHZ], ax
+   995                                  .done:
+   996 00000188 6661                        popad
+   997 0000018A C3                          ret
+   998                                  
+   999                                  
+  1000                                  ; cycles per loop iteration x 2000 x 11.93182 (PIT MHz x 10)
+  1001                                  clock_k:
+  1002 0000018B 902F4500                    dd 190 * 23864                 ; 386:  8 x DIV r16 (22) + LOOP
+  1003 0000018F 88764800                    dd 199 * 23864                 ; 486:  8 x DIV r16 (24) + LOOP
+  1004 00000193 10034B00                    dd 206 * 23864                 ; 586+: 8 x DIV r16 (25) + LOOP
+  1005                                  clock_std:
+  1006 00000197 A000C800FA004D0190-         dw 160, 200, 250, 333, 400, 500, 600, 666, 750, 800, 1000, 1200, 1330, 1500, 1660, 2000, 0
+  1006 000001A0 01F40158029A02EE02-
+  1006 000001A9 2003E803B0043205DC-
+  1006 000001B2 057C06D0070000     
+  1007                                  
+  1008                                  page_handlers:
+  1009 000001B9 EC00DE0B050C                dw H_STD, H_ADV, H_CHIP
+  1010                                  
+  1011                                  tab_table:
+  1012 000001BF 03                          db 3
+  1013 000001C0 [1603]                      dw s_tab0
+  1014 000001C2 0E                          db 14
+  1015 000001C3 [2003]                      dw s_tab1
+  1016 000001C5 1A                          db 26
+  1017 000001C6 [2B03]                      dw s_tab2
+  1018 000001C8 26                          db 38
+  1019 000001C9 [3603]                      dw s_tab3
+  1020 000001CB 31                          db 49
+  1021 000001CC [4003]                      dw s_tab4
+  1022 000001CE 3A                          db 58
+  1023 000001CF [4803]                      dw s_tab5
+  1024                                  
+  1025                                  ; list entries: label, help, AMI item number, handler
+  1026                                  tools_list:
+  1027 000001D1 [DC03]                      dw s_it_def
+  1028 000001D3 4F2D                        dw S_HELP_DEF
+  1029 000001D5 05                          db 5
+  1030 000001D6 8654                        dw H_DEF
+  1031 000001D8 [F503]                      dw s_it_pon
+  1032 000001DA 9B2D                        dw S_HELP_PON
+  1033 000001DC 06                          db 6
+  1034 000001DD 8654                        dw H_DEF
+  1035 000001DF [0C04]                      dw s_it_pwd
+  1036 000001E1 E52D                        dw S_HELP_PWD
+  1037 000001E3 07                          db 7
+  1038 000001E4 C8F1                        dw H_PWD
+  1039 000001E6 [1C04]                      dw s_it_det
+  1040 000001E8 112E                        dw S_HELP_DET
+  1041 000001EA 08                          db 8
+  1042 000001EB 444A                        dw H_DETECT
+  1043                                  exit_list:
+  1044 000001ED [3204]                      dw s_it_sav
+  1045 000001EF 7C2E                        dw S_HELP_SAV
+  1046 000001F1 0A                          db 10
+  1047 000001F2 DD29                        dw A_SAVEEXIT
+  1048 000001F4 [4904]                      dw s_it_qut
+  1049 000001F6 752E                        dw S_HELP_QUT
+  1050 000001F8 0B                          db 11
+  1051 000001F9 EC29                        dw A_QUIT
+  1052                                  
+  1053                                  ; Summary page: row, column, label, value descriptor
+  1054                                  %define LC 3
+  1055                                  %define RC 42
+  1056                                  sum_table:
+  1057 000001FB 0503                        db 5,  LC
+  1058 000001FD [5D04][4303]                dw l_cpu,    f_cpu
+  1059 00000201 0603                        db 6,  LC
+  1060 00000203 [6604][5A03]                dw l_clock,  f_mhz
+  1061 00000207 0703                        db 7,  LC
+  1062 00000209 [7004][8703]                dw l_fpu,    f_fpu
+  1063 0000020D 0803                        db 8,  LC
+  1064 0000020F [7A04][6805]                dw l_chip,   s_chipset
+  1065 00000213 0A03                        db 10, LC
+  1066 00000215 [8204][9503]                dw l_base,   f_base
+  1067 00000219 0B03                        db 11, LC
+  1068 0000021B [8E04][AA03]                dw l_ext,    f_ext
+  1069 0000021F 0C03                        db 12, LC
+  1070 00000221 [9E04][AF03]                dw l_total,  f_total
+  1071 00000225 0E03                        db 14, LC
+  1072 00000227 [AB04]E7BD                  dw l_cache,  R_EXTCACHE
+  1073 0000022B 0F03                        db 15, LC
+  1074 0000022D [BA04]8FBE                  dw l_vshad,  R_VSHADOW
+  1075 00000231 1003                        db 16, LC
+  1076 00000233 [C704]57C0                  dw l_sshad,  R_SSHADOW
+  1077 00000237 1203                        db 18, LC
+  1078 00000239 [D504][7705]                dw l_core,   s_core
+  1079 0000023D 1303                        db 19, LC
+  1080 0000023F [DF04][8805]                dw l_ver,    s_ver
+  1081 00000243 052A                        db 5,  RC
+  1082 00000245 [E604][B803]                dw l_fda,    f_fda
+  1083 00000249 062A                        db 6,  RC
+  1084 0000024B [F004][C003]                dw l_fdb,    f_fdb
+  1085 0000024F 082A                        db 8,  RC
+  1086 00000251 [FA04][4B04]                dw l_hdc,    f_c0
+  1087 00000255 092A                        db 9,  RC
+  1088 00000257 [1405][8D04]                dw l_phys,   f_c1
+  1089 0000025B 0A2A                        db 10, RC
+  1090 0000025D [2105][A404]                dw l_log,    f_c2
+  1091 00000261 0C2A                        db 12, RC
+  1092 00000263 [0705][4F04]                dw l_hdd,    f_d0
+  1093 00000267 0D2A                        db 13, RC
+  1094 00000269 [1405][9104]                dw l_phys,   f_d1
+  1095 0000026D 0E2A                        db 14, RC
+  1096 0000026F [2105][A804]                dw l_log,    f_d2
+  1097 00000273 102A                        db 16, RC
+  1098 00000275 [3005]A3BD                  dw l_boot,   R_BOOTSEQ
+  1099 00000279 112A                        db 17, RC
+  1100 0000027B [3E05]1DBD                  dw l_numl,   R_NUMLOCK
+  1101 0000027F 122A                        db 18, RC
+  1102 00000281 [4B05]6DBE                  dw l_pwd,    R_PASSWORD
+  1103 00000285 132A                        db 19, RC
+  1104 00000287 [5A05][DC03]                dw l_video,  f_video
+  1105 0000028B FF                          db 0xFF
+  1106                                  
+  1107 0000028C [8C05][9205][9805]-     cpu_names:   dw s_386, s_486, s_586, s_686
+  1107 00000292 [A005]             
+  1108                                  
+  1109                                  ; date/time fields of the Standard page: position, max digits, kind
+  1110                                  dt_fields:
+  1111 00000294 1B05                        dw 0x051B
+  1112 00000296 0200                        db 2, 0                        ; month
+  1113 00000298 1F05                        dw 0x051F
+  1114 0000029A 0201                        db 2, 1                        ; day
+  1115 0000029C 2205                        dw 0x0522
+  1116 0000029E 0402                        db 4, 2                        ; year
+  1117 000002A0 1606                        dw 0x0616
+  1118 000002A2 0203                        db 2, 3                        ; hour
+  1119 000002A4 1B06                        dw 0x061B
+  1120 000002A6 0204                        db 2, 4                        ; minute
+  1121 000002A8 2006                        dw 0x0620
+  1122 000002AA 0205                        db 2, 5                        ; second
+  1123 000002AC 0000                        dw 0
+  1124 000002AE BD6FAC6F9B6F8A6F        video_names: dw S_VGA, S_COL40, S_COL80, S_MONO
+  1125                                  
+  1126                                  ; active-tab attribute per colour scheme (index = CMOS 37h low nibble)
+  1127                                  tab_attrs:
+  1128 000002B6 2060207070702060            db 0x20, 0x60, 0x20, 0x70, 0x70, 0x70, 0x20, 0x60
+  1129 000002BE 2070707020602070            db 0x20, 0x70, 0x70, 0x70, 0x20, 0x60, 0x20, 0x70
+  1130                                  
+  1131 000002C6 425542696F73202874-     s_title:   db "BUBios (tm)    Copyright (c) 2026 Bits und Bolts    Ver 2.0    Port OPTi 495SLC", 0
+  1131 000002CF 6D2920202020436F70-
+  1131 000002D8 797269676874202863-
+  1131 000002E1 292032303236204269-
+  1131 000002EA 747320756E6420426F-
+  1131 000002F3 6C7473202020205665-
+  1131 000002FC 7220322E3020202020-
+  1131 00000305 506F7274204F505469-
+  1131 0000030E 20343935534C4300   
+  1132 00000316 2053756D6D61727920-     s_tab0:    db " Summary ", 0
+  1132 0000031F 00                 
+  1133 00000320 205374616E64617264-     s_tab1:    db " Standard ", 0
+  1133 00000329 2000               
+  1134 0000032B 20416476616E636564-     s_tab2:    db " Advanced ", 0
+  1134 00000334 2000               
+  1135 00000336 204368697073657420-     s_tab3:    db " Chipset ", 0
+  1135 0000033F 00                 
+  1136 00000340 20546F6F6C732000        s_tab4:    db " Tools ", 0
+  1137 00000348 20457869742000          s_tab5:    db " Exit ", 0
+  1138 0000034F B5204553433A457869-     s_foot_main: db 0xB5, " ESC:Exit  Tab/Shift-Tab:Page  ", 0x18, 0x19, ":Select  Enter:Run  F2/F3:Color  F10:Save & Exit ", 0xC6, 0
+  1138 00000358 7420205461622F5368-
+  1138 00000361 6966742D5461623A50-
+  1138 0000036A 616765202018193A53-
+  1138 00000373 656C6563742020456E-
+  1138 0000037C 7465723A52756E2020-
+  1138 00000385 46322F46333A436F6C-
+  1138 0000038E 6F7220204631303A53-
+  1138 00000397 617665202620457869-
+  1138 000003A0 7420C600           
+  1139 000003A4 4269747320756E6420-     s_tagline: db "Bits und Bolts  ", 0xFE, "  ECHS large-disk support up to 8.4 GB", 0
+  1139 000003AD 426F6C74732020FE20-
+  1139 000003B6 2045434853206C6172-
+  1139 000003BF 67652D6469736B2073-
+  1139 000003C8 7570706F7274207570-
+  1139 000003D1 20746F20382E342047-
+  1139 000003DA 4200               
+  1140                                  
+  1141 000003DC 4C6F61642042494F53-     s_it_def:  db "Load BIOS Setup Defaults", 0
+  1141 000003E5 205365747570204465-
+  1141 000003EE 6661756C747300     
+  1142 000003F5 4C6F616420506F7765-     s_it_pon:  db "Load Power-On Defaults", 0
+  1142 000003FE 722D4F6E2044656661-
+  1142 00000407 756C747300         
+  1143 0000040C 4368616E6765205061-     s_it_pwd:  db "Change Password", 0
+  1143 00000415 7373776F726400     
+  1144 0000041C 4175746F2D44657465-     s_it_det:  db "Auto-Detect Hard Disk", 0
+  1144 00000425 637420486172642044-
+  1144 0000042E 69736B00           
+  1145 00000432 536176652053657474-     s_it_sav:  db "Save Settings and Exit", 0
+  1145 0000043B 696E677320616E6420-
+  1145 00000444 4578697400         
+  1146 00000449 457869742057697468-     s_it_qut:  db "Exit Without Saving", 0
+  1146 00000452 6F757420536176696E-
+  1146 0000045B 6700               
+  1147                                  
+  1148 0000045D 435055205479706500      l_cpu:     db "CPU Type", 0
+  1149 00000466 43505520436C6F636B-     l_clock:   db "CPU Clock", 0
+  1149 0000046F 00                 
+  1150 00000470 4D61746820556E6974-     l_fpu:     db "Math Unit", 0
+  1150 00000479 00                 
+  1151 0000047A 4368697073657400        l_chip:    db "Chipset", 0
+  1152 00000482 42617365204D656D6F-     l_base:    db "Base Memory", 0
+  1152 0000048B 727900             
+  1153 0000048E 457874656E64656420-     l_ext:     db "Extended Memory", 0
+  1153 00000497 4D656D6F727900     
+  1154 0000049E 546F74616C204D656D-     l_total:   db "Total Memory", 0
+  1154 000004A7 6F727900           
+  1155 000004AB 45787465726E616C20-     l_cache:   db "External Cache", 0
+  1155 000004B4 436163686500       
+  1156 000004BA 566964656F20536861-     l_vshad:   db "Video Shadow", 0
+  1156 000004C3 646F7700           
+  1157 000004C7 53797374656D205368-     l_sshad:   db "System Shadow", 0
+  1157 000004D0 61646F7700         
+  1158 000004D5 42494F5320436F7265-     l_core:    db "BIOS Core", 0
+  1158 000004DE 00                 
+  1159 000004DF 425542696F7300          l_ver:     db "BUBios", 0
+  1160 000004E6 466C6F70707920413A-     l_fda:     db "Floppy A:", 0
+  1160 000004EF 00                 
+  1161 000004F0 466C6F70707920423A-     l_fdb:     db "Floppy B:", 0
+  1161 000004F9 00                 
+  1162 000004FA 48617264204469736B-     l_hdc:     db "Hard Disk C:", 0
+  1162 00000503 20433A00           
+  1163 00000507 48617264204469736B-     l_hdd:     db "Hard Disk D:", 0
+  1163 00000510 20443A00           
+  1164 00000514 20C3C4205068797369-     l_phys:    db " ", 0xC3, 0xC4, " Physical", 0
+  1164 0000051D 63616C00           
+  1165 00000521 20C0C420444F532028-     l_log:     db " ", 0xC0, 0xC4, " DOS (ECHS)", 0
+  1165 0000052A 454348532900       
+  1166 00000530 426F6F742053657175-     l_boot:    db "Boot Sequence", 0
+  1166 00000539 656E636500         
+  1167 0000053E 426F6F74204E756D4C-     l_numl:    db "Boot NumLock", 0
+  1167 00000547 6F636B00           
+  1168 0000054B 50617373776F726420-     l_pwd:     db "Password Check", 0
+  1168 00000554 436865636B00       
+  1169 0000055A 566964656F20446973-     l_video:   db "Video Display", 0
+  1169 00000563 706C617900         
+  1170                                  
+  1171 00000568 4F5054692038324334-     s_chipset: db "OPTi 82C495SLC", 0
+  1171 00000571 3935534C4300       
+  1172 00000577 414D4942494F532031-     s_core:    db "AMIBIOS 11/11/92", 0
+  1172 00000580 312F31312F393200   
+  1173 00000588 322E3000                s_ver:     db "2.0", 0
+  1174 0000058C 383033383600            s_386:     db "80386", 0
+  1175 00000592 383034383600            s_486:     db "80486", 0
+  1176 00000598 50656E7469756D00        s_586:     db "Pentium", 0
+  1177 000005A0 36383620636C617373-     s_686:     db "686 class", 0
+  1177 000005A9 00                 
+  1178 000005AA 204D487A00              s_mhz:     db " MHz", 0
+  1179 000005AF 50726573656E7400        s_present: db "Present", 0
+  1180 000005B7 4E6F6E6500              s_none:    db "None", 0
+  1181 000005BC 6E6F74206E65656465-     s_notrans: db "not needed", 0
+  1181 000005C5 6400               
+  1182 000005C7 204D4220205B00          s_mb_type: db " MB  [", 0
+  1183                                  
+  1184                                  data_end:
+  1185                                  
+  1186                                  ; =====================================================================
+  1187                                  section code2 start=0x1000 vstart=0x7F14
+  1188                                  ; =====================================================================
+  1189                                  ; bu_dtentry -- numeric entry for a date/time field of the Standard page
+  1190                                  ;   In : AL = first digit typed, [BU_DTPOS]/[BU_DTW] = field
+  1191                                  ;   Out: AX = key to hand back to AMI's field loop
+  1192                                  ;        Enter (next field) after a commit, 0 (ignored) after ESC,
+  1193                                  ;        or the navigation key that ended the entry.
+  1194                                  ;   Digits fill the field; it commits by itself when full.  Backspace
+  1195                                  ;   deletes, ESC cancels.  Years may be typed with 2 or 4 digits.
+  1196                                  bu_dtentry:
+  1197 00000000 53                          push bx
+  1198 00000001 51                          push cx
+  1199 00000002 52                          push dx
+  1200 00000003 56                          push si
+  1201 00000004 57                          push di
+  1202 00000005 55                          push bp
+  1203 00000006 06                          push es
+  1204 00000007 6A00                        push 0
+  1205 00000009 07                          pop  es
+  1206 0000000A 2680068E0240                add  byte [es:0x28E], 0x40     ; hold AMI's once-a-second clock redraw
+  1207 00000010 8B1688EF                    mov  dx, [BU_DTPOS]
+  1208 00000014 BE[9402]                    mov  si, dt_fields
+  1209                                  .find:
+  1210 00000017 833C00                      cmp  word [si], 0
+  1211 0000001A 7409                        je   .none
+  1212 0000001C 3914                        cmp  [si], dx
+  1213 0000001E 7409                        je   .found
+  1214 00000020 83C604                      add  si, 4
+  1215 00000023 EBF2                        jmp  .find
+  1216                                  .none:
+  1217 00000025 31C0                        xor  ax, ax
+  1218 00000027 EB70                        jmp  .done
+  1219                                  .found:
+  1220 00000029 C60690EF20                  mov  byte [BU_BUF], ' '
+  1221 0000002E 31ED                        xor  bp, bp                    ; value
+  1222 00000030 31C9                        xor  cx, cx                    ; CL = digits typed
+  1223                                  .digit:
+  1224 00000032 3A4C02                      cmp  cl, [si+2]
+  1225 00000035 731D                        jae  .key
+  1226 00000037 88CB                        mov  bl, cl
+  1227 00000039 30FF                        xor  bh, bh
+  1228 0000003B 888791EF                    mov  [bx+BU_BUF+1], al
+  1229 0000003F 2C30                        sub  al, '0'
+  1230 00000041 98                          cbw
+  1231 00000042 95                          xchg ax, bp
+  1232 00000043 BB0A00                      mov  bx, 10
+  1233 00000046 F7E3                        mul  bx
+  1234 00000048 01C5                        add  bp, ax
+  1235 0000004A FEC1                        inc  cl
+  1236 0000004C E85B00                      call dt_echo
+  1237 0000004F 3A4C02                      cmp  cl, [si+2]
+  1238 00000052 7338                        jae  .enter                    ; field full: commit, next field
+  1239                                  .key:
+  1240 00000054 B400                        mov  ah, 0
+  1241 00000056 CD16                        int  0x16
+  1242 00000058 3C30                        cmp  al, '0'
+  1243 0000005A 7204                        jb   .nd
+  1244 0000005C 3C39                        cmp  al, '9'
+  1245 0000005E 76D2                        jbe  .digit
+  1246                                  .nd:
+  1247 00000060 3D080E                      cmp  ax, 0x0E08                ; Backspace
+  1248 00000063 7516                        jne  .ne
+  1249 00000065 08C9                        or   cl, cl
+  1250 00000067 74EB                        jz   .key
+  1251 00000069 FEC9                        dec  cl
+  1252 0000006B 89E8                        mov  ax, bp
+  1253 0000006D 31D2                        xor  dx, dx
+  1254 0000006F BB0A00                      mov  bx, 10
+  1255 00000072 F7F3                        div  bx
+  1256 00000074 89C5                        mov  bp, ax
+  1257 00000076 E83100                      call dt_echo
+  1258 00000079 EBD9                        jmp  .key
+  1259                                  .ne:
+  1260 0000007B 80FC01                      cmp  ah, 1                     ; ESC: cancel
+  1261 0000007E 7414                        je   .cancel
+  1262 00000080 3D0D1C                      cmp  ax, 0x1C0D
+  1263 00000083 7407                        je   .enter
+  1264 00000085 50                          push ax                        ; any other key: commit and pass it on
+  1265 00000086 E8(0000)                    call dt_commit
+  1266 00000089 58                          pop  ax
+  1267 0000008A EB0D                        jmp  .done
+  1268                                  .enter:
+  1269 0000008C E8(0000)                    call dt_commit
+  1270 0000008F B80D1C                      mov  ax, 0x1C0D
+  1271 00000092 EB05                        jmp  .done
+  1272                                  .cancel:
+  1273 00000094 E8(2260)                    call A_DTSHOW
+  1274 00000097 31C0                        xor  ax, ax
+  1275                                  .done:
+  1276 00000099 6A00                        push 0
+  1277 0000009B 07                          pop  es
+  1278 0000009C 26802E8E0240                sub  byte [es:0x28E], 0x40
+  1279 000000A2 07                          pop  es
+  1280 000000A3 5D                          pop  bp
+  1281 000000A4 5F                          pop  di
+  1282 000000A5 5E                          pop  si
+  1283 000000A6 5A                          pop  dx
+  1284 000000A7 59                          pop  cx
+  1285 000000A8 5B                          pop  bx
+  1286 000000A9 C3                          ret
+  1287                                  
+  1288                                  ; show " digits" padded to the field width, in the highlight colour
+  1289                                  dt_echo:
+  1290 000000AA 60                          pusha
+  1291 000000AB 88CB                        mov  bl, cl
+  1292 000000AD 30FF                        xor  bh, bh
+  1293 000000AF 8DBF91EF                    lea  di, [bx+BU_BUF+1]
+  1294 000000B3 0FB6068AEF                  movzx ax, byte [BU_DTW]
+  1295 000000B8 0590EF                      add  ax, BU_BUF
+  1296                                  .pad:
+  1297 000000BB 39C7                        cmp  di, ax
+  1298 000000BD 7306                        jae  .pz
+  1299 000000BF C60520                      mov  byte [di], ' '
+  1300 000000C2 47                          inc  di
+  1301 000000C3 EBF6                        jmp  .pad
+  1302                                  .pz:
+  1303 000000C5 C60500                      mov  byte [di], 0
+  1304 000000C8 A0A3E1                      mov  al, [C_SEL]
+  1305 000000CB A29FE1                      mov  [V_ATTR], al
+  1306 000000CE A188EF                      mov  ax, [BU_DTPOS]            ; the field's highlight starts at its column
+  1307 000000D1 BB90EF                      mov  bx, BU_BUF
+  1308 000000D4 E8(DF52)                    call A_PRINT
+  1309 000000D7 61                          popa
+  1310 000000D8 C3                          ret
+  1311                                  
+  1312                                  ; =====================================================================
+  1313                                  section code3 start=0x1400 vstart=0x7856
+  1314                                  ; =====================================================================
+  1315                                  ; dt_commit -- write the typed value to the RTC (if valid) and redraw
+  1316                                  ;   In: BP = value, CL = digits typed, SI -> dt_fields entry
+  1317                                  dt_commit:
+  1318 00000000 08C9                        or   cl, cl
+  1319 00000002 0F849500                    jz   .show
+  1320 00000006 89EB                        mov  bx, bp
+  1321 00000008 8A4403                      mov  al, [si+3]
+  1322 0000000B 3C03                        cmp  al, 3
+  1323 0000000D 7358                        jae  .time
+  1324 0000000F 50                          push ax
+  1325 00000010 E8(8061)                    call A_GETDATE
+  1326 00000013 58                          pop  ax
+  1327 00000014 3C01                        cmp  al, 1
+  1328 00000016 7237                        jb   .mon
+  1329 00000018 7441                        je   .day
+  1330 0000001A 83FB64                      cmp  bx, 100                   ; year: 2 digits -> 1980..2079
+  1331 0000001D 730D                        jae  .y4
+  1332 0000001F 81C36C07                    add  bx, 1900
+  1333 00000023 81FBBC07                    cmp  bx, 1980
+  1334 00000027 7303                        jae  .y4
+  1335 00000029 83C364                      add  bx, 100
+  1336                                  .y4:
+  1337 0000002C 81FB6D07                    cmp  bx, 1901
+  1338 00000030 7269                        jb   .show
+  1339 00000032 81FB3308                    cmp  bx, 2099
+  1340 00000036 7763                        ja   .show
+  1341 00000038 89D8                        mov  ax, bx
+  1342 0000003A B364                        mov  bl, 100
+  1343 0000003C F6F3                        div  bl
+  1344 0000003E 88E7                        mov  bh, ah
+  1345 00000040 E8(FB04)                    call dt_bcd
+  1346 00000043 88C5                        mov  ch, al
+  1347 00000045 88F8                        mov  al, bh
+  1348 00000047 E8(FB04)                    call dt_bcd
+  1349 0000004A 88C1                        mov  cl, al
+  1350 0000004C E9(CB5F)                    jmp  A_SETDATE
+  1351                                  .mon:
+  1352 0000004F B40C                        mov  ah, 12
+  1353 00000051 E8(E604)                    call dt_range1
+  1354 00000054 7245                        jc   .show
+  1355 00000056 88C6                        mov  dh, al
+  1356 00000058 E9(CB5F)                    jmp  A_SETDATE
+  1357                                  .day:
+  1358 0000005B B41F                        mov  ah, 31
+  1359 0000005D E8(E604)                    call dt_range1
+  1360 00000060 7239                        jc   .show
+  1361 00000062 88C2                        mov  dl, al
+  1362 00000064 E9(CB5F)                    jmp  A_SETDATE
+  1363                                  .time:
+  1364 00000067 50                          push ax
+  1365 00000068 E8(BA61)                    call A_GETTIME
+  1366 0000006B 58                          pop  ax
+  1367 0000006C 83FB3B                      cmp  bx, 59
+  1368 0000006F 772A                        ja   .show
+  1369 00000071 3C04                        cmp  al, 4
+  1370 00000073 7216                        jb   .hour
+  1371 00000075 50                          push ax
+  1372 00000076 88D8                        mov  al, bl
+  1373 00000078 E8(FB04)                    call dt_bcd
+  1374 0000007B 88C4                        mov  ah, al
+  1375 0000007D 5B                          pop  bx                        ; BL = kind
+  1376 0000007E 80FB04                      cmp  bl, 4
+  1377 00000081 7404                        je   .min
+  1378 00000083 88E6                        mov  dh, ah
+  1379 00000085 EB10                        jmp  .sett
+  1380                                  .min:
+  1381 00000087 88E1                        mov  cl, ah
+  1382 00000089 EB0C                        jmp  .sett
+  1383                                  .hour:
+  1384 0000008B 83FB17                      cmp  bx, 23
+  1385 0000008E 770B                        ja   .show
+  1386 00000090 88D8                        mov  al, bl
+  1387 00000092 E8(FB04)                    call dt_bcd
+  1388 00000095 88C5                        mov  ch, al
+  1389                                  .sett:
+  1390 00000097 B403                        mov  ah, 3
+  1391 00000099 CD1A                        int  0x1A
+  1392                                  .show:
+  1393 0000009B E9(2260)                    jmp  A_DTSHOW
+  1394                                  
+  1395                                  code3_end:
+  1396                                  %include "post.asm"
+     1                              <1> ; =====================================================================
+     2                              <1> ;  BUBios 2.0 -- POST screen
+     3                              <1> ;
+     4                              <1> ;  Replaces AMI's start-up text (logo line, "Hit <DEL>", the memory
+     5                              <1> ;  count, "WAIT......", the configuration box and the end-of-POST beep)
+     6                              <1> ;  with one screen that is drawn as soon as the video BIOS is up and is
+     7                              <1> ;  filled in while POST runs.  AMI's POST itself is not changed: every
+     8                              <1> ;  hook replaces a print, or calls the AMI routine it replaces first.
+     9                              <1> ;
+    10                              <1> ;  Hook sites (patched and verified by py/build_bubios.py):
+    11                              <1> ;    0x593B  MOV SI,8100 / CALL F52E (logo)  -> NOP x6
+    12                              <1> ;    0x5945  CALL F42E (BIOS ID lines)       -> CALL bu_post_init
+    13                              <1> ;    0x12BF  MOV SI,8100 / CALL F52E (logo)  -> NOP x6  (redraw after SETUP)
+    14                              <1> ;    0x12C6  CALL F42E                       -> CALL bu_post_init
+    15                              <1> ;    0x12CD  MOV SI,76AC / CALL F52E (WAIT)  -> CALL bu_wait + NOP x3
+    16                              <1> ;    0x4F04  MOV SI,7688 / CALL F52E (DEL)   -> CALL bu_delmsg + NOP x3
+    17                              <1> ;    0x4EA1  memory count print (49 bytes)   -> MOV AX,BX / ADD AX,BP /
+    18                              <1> ;                                               CALL bu_memshow / JMP 4ED2
+    19                              <1> ;    0x4CB4  CALL 4CD3 / MOV SI,76AC / CALL F52E (WAIT)
+    20                              <1> ;                                            -> CALL bu_wait + NOP x6
+    21                              <1> ;    0x1610  CALL F571 (end-of-POST beep)    -> CALL bu_chime
+    22                              <1> ;    0x1613  CALL 16B7 (clear screen)        -> CALL bu_refresh
+    23                              <1> ;    0x164C  CALL 39C0 (AMI config box)      -> CALL bu_final
+    24                              <1> ;    0x120D, 0x158C  CALL 1656 (error list)  -> CALL bu_errors
+    25                              <1> ;
+    26                              <1> ;  All of it runs from segment F000 in real mode, with DS = 0040h (BDA)
+    27                              <1> ;  on AMI's POST stack (0030:0100).  State between the hooks lives in
+    28                              <1> ;  the BDA inter-application area 40:F0-40:FF; bu_final clears it again
+    29                              <1> ;  before the boot.  Strings shared with the setup pages are read from
+    30                              <1> ;  the BUBios data block (F000:79xx) with CS overrides.
+    31                              <1> ;
+    32                              <1> ;  The code fills the space of AMI's old configuration box
+    33                              <1> ;  (0x39C0-0x3B83 and 0x3B8F-0x4033; AMI's shared CR/LF routine at
+    34                              <1> ;  0x3B84-0x3B8E stays where it is).
+    35                              <1> ; =====================================================================
+    36                              <1> 
+    37                              <1> ; ---- AMI POST routines ----------------------------------------------
+    38                              <1> P_BIOSID   equ 0xF42E     ; BIOS ID lines (also sets the A20 gate, keep it)
+    39                              <1> P_CMOSRD   equ 0xEE94     ; AL = CMOS register AL
+    40                              <1> P_CHIPRD   equ 0x8EE3     ; AL = OPTi register AL (ports 22h/24h)
+    41                              <1> P_OPTION   equ 0x8300     ; ZF=1 if AMI CMOS option AL is set
+    42                              <1> P_IDEID    equ 0xAF07     ; AH=0: IDENTIFY drive DL into ES:BX, CF=error
+    43                              <1> S_BIOSID   equ 0x8078     ; "40-040A-001102-00101111-111192-OP495SLC"
+    44                              <1> O_BOOTSEQ  equ 0xB870     ; byte: AMI option code of "System Boot Up Sequence"
+    45                              <1> 
+    46                              <1> ; ---- state in the BDA inter-application area (DS = 0040h) ----------
+    47                              <1> ST_FLAG    equ 0xF0       ; FLAG_UP = our screen is up (this POST)
+    48                              <1> FLAG_UP    equ 0xB2
+    49                              <1> ST_CPU     equ 0xF1       ; 3/4/5/6 = family, +80h = Cyrix core
+    50                              <1> ST_FPU     equ 0xF2       ; 1 = coprocessor answered
+    51                              <1> ST_SCH     equ 0xF3       ; colour scheme 0..5, 6 = monochrome
+    52                              <1> ST_T0      equ 0xF4       ; word: RTC minute*60+second at the start
+    53                              <1> ST_UNITS   equ 0xF6       ; word: 64 KB blocks counted so far
+    54                              <1> ST_TOTAL   equ 0xF8       ; word: 64 KB blocks in total (0 = unknown)
+    55                              <1> ST_STAT    equ 0xFA       ; word: status line text
+    56                              <1> ST_MHZ     equ 0xFC       ; word: measured clock x10
+    57                              <1> 
+    58                              <1> ; ---- low memory used only at the very end of POST ---------------------
+    59                              <1> TLOOP_SEG  equ 0x07C0     ; timing loop copied to 07C0:0000 (= 0:7C00)
+    60                              <1> IDBUF      equ 0x7E00     ; IDENTIFY data at 0000:7E00
+    61                              <1> 
+    62                              <1> ; ---- attribute indices ------------------------------------------------
+    63                              <1> AT_BG       equ 0
+    64                              <1> AT_TITLE    equ 1
+    65                              <1> AT_LABEL    equ 2
+    66                              <1> AT_VALUE    equ 3
+    67                              <1> AT_FILL     equ 4
+    68                              <1> AT_EMPTY    equ 5
+    69                              <1> AT_ACCENT   equ 6
+    70                              <1> AT_ERR      equ 7
+    71                              <1> AT_STAT     equ 8
+    72                              <1> NATTR      equ 9
+    73                              <1> 
+    74                              <1> ; ---- layout -------------------------------------------------------------
+    75                              <1> R_SYS      equ 2          ; rows 2..5: processor / system block
+    76                              <1> R_MEM      equ 7          ; row 7 bar, row 8 block map
+    77                              <1> R_FDD      equ 10
+    78                              <1> R_HDC      equ 11         ; rows 11-12 disk C:, 13-14 disk D:
+    79                              <1> R_PORTS    equ 15
+    80                              <1> R_ROMS     equ 16
+    81                              <1> R_LINE     equ 17
+    82                              <1> R_MSG      equ 18         ; rows 18-20 and 22-23: messages (AMI's errors)
+    83                              <1> R_AMI      equ 21         ; AMI copyright line: POST checks that it is on
+    84                              <1>                           ; screen at row 21, column 0 (F3DB) and crashes
+    85                              <1>                           ; on purpose if it is not
+    86                              <1> R_STAT     equ 24
+    87                              <1> C_LBL      equ 2
+    88                              <1> C_VAL      equ 15
+    89                              <1> C_RLBL     equ 42
+    90                              <1> C_RVAL     equ 55
+    91                              <1> BAR_W      equ 40
+    92                              <1> MAP_MAX    equ 32
+    93                              <1> 
+    94                              <1> %define POS(r,c) (((r) << 8) | (c))
+    95                              <1> 
+    96                              <1> ; =====================================================================
+    97                              <1> section post1 start=0x1800 vstart=0x39C0
+    98                              <1> ; =====================================================================
+    99                              <1> 
+   100                              <1> ; ---------------------------------------------------------------------
+   101                              <1> ; hook entry points
+   102                              <1> ; ---------------------------------------------------------------------
+   103                              <1> bu_post_init:                      ; replaces CALL F42E once video is up
+   104 00000000 E8(2EF4)            <1>     call P_BIOSID                  ; keep AMI's side effects (A20 gate)
+   105 00000003 E87B00              <1>     call enter
+   106 00000006 E8(3B00)            <1>     call cpu_detect
+   107 00000009 C706FA00[0405]      <1>     mov  word [ST_STAT], s_st_mem
+   108 0000000F 803EF000B2          <1>     cmp  byte [ST_FLAG], FLAG_UP   ; second call (after SETUP): keep the
+   109 00000014 7508                <1>     jne  .first                    ; memory count; the POST time would
+   110 00000016 C706F400FFFF        <1>     mov  word [ST_T0], 0xFFFF      ; include the time spent in SETUP, so
+   111 0000001C EB13                <1>     jmp  short .draw               ; it is not shown
+   112                              <1> .first:
+   113 0000001E C606F000B2          <1>     mov  byte [ST_FLAG], FLAG_UP
+   114 00000023 E8(D600)            <1>     call rtc_now
+   115 00000026 A3F400              <1>     mov  [ST_T0], ax
+   116 00000029 31C0                <1>     xor  ax, ax
+   117 0000002B A3F600              <1>     mov  [ST_UNITS], ax
+   118 0000002E A3F800              <1>     mov  [ST_TOTAL], ax
+   119                              <1> .draw:
+   120 00000031 E8(B801)            <1>     call draw_all
+   121 00000034 BA000F              <1>     mov  dx, POS(R_LINE-2, 0)       ; AMI keeps row+2 as its print row
+   122 00000037 EB3E                <1>     jmp  leave_cur
+   123                              <1> 
+   124                              <1> bu_refresh:                        ; replaces the clear-screen before boot
+   125 00000039 E84500              <1>     call enter
+   126 0000003C B40F                <1>     mov  ah, 0x0F                  ; as AMI's 16B7: set the current mode again
+   127 0000003E CD10                <1>     int  0x10
+   128 00000040 B400                <1>     mov  ah, 0
+   129 00000042 CD10                <1>     int  0x10
+   130 00000044 803EF000B2          <1>     cmp  byte [ST_FLAG], FLAG_UP
+   131 00000049 752F                <1>     jne  hook_ret                  ; our screen was never set up
+   132 0000004B C706FA00[2E05]      <1>     mov  word [ST_STAT], s_st_dev
+   133 00000051 E8(B801)            <1>     call draw_all
+   134 00000054 EB1E                <1>     jmp  short leave_line
+   135                              <1> 
+   136                              <1> bu_delmsg:
+   137 00000056 E82800              <1>     call enter
+   138 00000059 B8[1705]            <1>     mov  ax, s_st_del
+   139 0000005C EB06                <1>     jmp  short status
+   140                              <1> bu_wait:
+   141 0000005E E82000              <1>     call enter
+   142 00000061 B8[2E05]            <1>     mov  ax, s_st_dev
+   143                              <1> status:
+   144 00000064 803EF000B2          <1>     cmp  byte [ST_FLAG], FLAG_UP
+   145 00000069 750F                <1>     jne  hook_ret
+   146 0000006B A3FA00              <1>     mov  [ST_STAT], ax
+   147 0000006E E8(F500)            <1>     call vid_es
+   148 00000071 E8(7802)            <1>     call draw_status
+   149                              <1> leave_line:
+   150 00000074 BA0011              <1>     mov  dx, POS(R_LINE, 0)         ; AMI's messages start on the next row
+   151                              <1> leave_cur:
+   152 00000077 E8(3D01)            <1>     call set_cursor
+   153                              <1> hook_ret:
+   154 0000007A 07                  <1>     pop  es
+   155 0000007B 1F                  <1>     pop  ds
+   156 0000007C 61                  <1>     popa
+   157 0000007D 83C402              <1>     add  sp, 2                     ; the return address of 'enter'
+   158 00000080 C3                  <1>     ret
+   159                              <1> 
+   160                              <1> ; enter: saves all registers and sets DS = 0040h (BX is changed).
+   161                              <1> ; The hook then leaves through hook_ret.
+   162                              <1> enter:
+   163 00000081 60                  <1>     pusha
+   164 00000082 1E                  <1>     push ds
+   165 00000083 06                  <1>     push es
+   166 00000084 6A40                <1>     push 0x40
+   167 00000086 1F                  <1>     pop  ds
+   168 00000087 89E3                <1>     mov  bx, sp
+   169 00000089 36FF6714            <1>     jmp  word [ss:bx+20]
+   170                              <1> 
+   171                              <1> ; ---------------------------------------------------------------------
+   172                              <1> ; bu_errors -- replaces CALL 1656 (AMI's error list) at 0x120D and 0x158C:
+   173                              <1> ; gives the messages all six rows, including the copyright row (POST no
+   174                              <1> ; longer checks it at this point), then runs AMI's routine
+   175                              <1> ; ---------------------------------------------------------------------
+   176                              <1> bu_errors:
+   177 0000008D E8F1FF              <1>     call enter
+   178 00000090 803EF000B2          <1>     cmp  byte [ST_FLAG], FLAG_UP
+   179 00000095 751F                <1>     jne  .go
+   180 00000097 E8(F500)            <1>     call vid_es
+   181 0000009A B020                <1>     mov  al, ' '
+   182 0000009C B307                <1>     mov  bl, AT_ERR
+   183 0000009E B9E001              <1>     mov  cx, 80*6
+   184 000000A1 BA0012              <1>     mov  dx, POS(R_MSG, 0)
+   185 000000A4 E8(5401)            <1>     call fill_at
+   186 000000A7 C706FA00[4305]      <1>     mov  word [ST_STAT], s_st_err
+   187 000000AD E8(7802)            <1>     call draw_status
+   188 000000B0 BA0011              <1>     mov  dx, POS(R_LINE, 0)
+   189 000000B3 E8(3D01)            <1>     call set_cursor
+   190 000000B6 07                  <1> .go:pop  es
+   191 000000B7 1F                  <1>     pop  ds
+   192 000000B8 61                  <1>     popa
+   193 000000B9 83C402              <1>     add  sp, 2
+   194 000000BC E9(5616)            <1>     jmp  0x1656
+   195                              <1> 
+   196                              <1> ; ---------------------------------------------------------------------
+   197                              <1> ; bu_memshow -- memory count (replaces AMI's "nnnnnn KB OK")
+   198                              <1> ;   In: AX = 64 KB blocks counted, DX = blocks still to go in this
+   199                              <1> ;       pass, BP = first block of the pass (1 = base memory, 0Ah = 640K-1M,
+   200                              <1> ;       10h = above 1 MB)
+   201                              <1> ; ---------------------------------------------------------------------
+   202                              <1> bu_memshow:
+   203 000000BF E8BFFF              <1>     call enter
+   204 000000C2 803EF000B2          <1>     cmp  byte [ST_FLAG], FLAG_UP
+   205 000000C7 75B1                <1>     jne  hook_ret
+   206 000000C9 A3F600              <1>     mov  [ST_UNITS], ax
+   207 000000CC 83FD10              <1>     cmp  bp, 0x10
+   208 000000CF 7205                <1>     jb   .base
+   209 000000D1 01D0                <1>     add  ax, dx                    ; above 1 MB: AX+DX-1 = last block
+   210 000000D3 48                  <1>     dec  ax
+   211 000000D4 EB12                <1>     jmp  short .set
+   212                              <1> .base:                             ; below 1 MB the total is not known yet:
+   213 000000D6 B031                <1>     mov  al, 0x31                  ; use the extended memory found last time
+   214 000000D8 E8(94EE)            <1>     call P_CMOSRD                  ; (CMOS 31h:30h, KB)
+   215 000000DB 88C4                <1>     mov  ah, al
+   216 000000DD B030                <1>     mov  al, 0x30
+   217 000000DF E8(94EE)            <1>     call P_CMOSRD
+   218 000000E2 C1E806              <1>     shr  ax, 6
+   219 000000E5 83C010              <1>     add  ax, 16
+   220                              <1> .set:
+   221 000000E8 A3F800              <1>     mov  [ST_TOTAL], ax
+   222 000000EB E8(F500)            <1>     call vid_es
+   223 000000EE E8(A102)            <1>     call draw_memory
+   224 000000F1 EB87                <1>     jmp  short hook_ret
+   225                              <1> 
+   226                              <1> post1_end:
+   227                              <1> 
+   228                              <1> ; =====================================================================
+   229                              <1> section post2 start=0x1C00 vstart=0x3B8F
+   230                              <1> ; =====================================================================
+   231                              <1> 
+   232                              <1> ; ---------------------------------------------------------------------
+   233                              <1> ; bu_chime -- two short notes instead of the end-of-POST beep
+   234                              <1> ; ---------------------------------------------------------------------
+   235                              <1> bu_chime:
+   236 00000000 60                  <1>     pusha
+   237 00000001 BB7404              <1>     mov  bx, 1140                  ; ~1047 Hz (C6)
+   238 00000004 E80800              <1>     call .note
+   239 00000007 BBF902              <1>     mov  bx, 761                   ; ~1568 Hz (G6)
+   240 0000000A E80200              <1>     call .note
+   241 0000000D 61                  <1>     popa
+   242 0000000E C3                  <1>     ret
+   243                              <1> .note:
+   244 0000000F B0B6                <1>     mov  al, 0xB6
+   245 00000011 E643                <1>     out  0x43, al
+   246 00000013 88D8                <1>     mov  al, bl
+   247 00000015 E642                <1>     out  0x42, al
+   248 00000017 88F8                <1>     mov  al, bh
+   249 00000019 E642                <1>     out  0x42, al
+   250 0000001B E461                <1>     in   al, 0x61
+   251 0000001D 0C03                <1>     or   al, 3
+   252 0000001F E661                <1>     out  0x61, al
+   253 00000021 B9A00F              <1>     mov  cx, 4000                  ; 4000 refresh toggles x 15 us = 60 ms
+   254 00000024 E461                <1> .t: in   al, 0x61
+   255 00000026 2410                <1>     and  al, 0x10
+   256 00000028 88C4                <1>     mov  ah, al
+   257 0000002A E461                <1> .t2:in   al, 0x61
+   258 0000002C 2410                <1>     and  al, 0x10
+   259 0000002E 38E0                <1>     cmp  al, ah
+   260 00000030 74F8                <1>     je   .t2
+   261 00000032 E2F0                <1>     loop .t
+   262 00000034 E461                <1>     in   al, 0x61
+   263 00000036 24FC                <1>     and  al, 0xFC
+   264 00000038 E661                <1>     out  0x61, al
+   265 0000003A C3                  <1>     ret
+   266                              <1> 
+   267                              <1> ; ---------------------------------------------------------------------
+   268                              <1> ; cpu_detect -> [ST_CPU], [ST_FPU]
+   269                              <1> ; ---------------------------------------------------------------------
+   270                              <1> cpu_detect:
+   271 0000003B 31C0                <1>     xor  ax, ax                    ; Cyrix cores leave the flags alone on DIV
+   272 0000003D 9E                  <1>     sahf
+   273 0000003E B80500              <1>     mov  ax, 5
+   274 00000041 B302                <1>     mov  bl, 2
+   275 00000043 F6F3                <1>     div  bl
+   276 00000045 9F                  <1>     lahf
+   277 00000046 30C9                <1>     xor  cl, cl
+   278 00000048 80FC02              <1>     cmp  ah, 2
+   279 0000004B 7502                <1>     jne  .ac
+   280 0000004D B180                <1>     mov  cl, 0x80
+   281 0000004F B503                <1> .ac:mov  ch, 3
+   282 00000051 66BB00000400        <1>     mov  ebx, 0x40000              ; AC flag: 486 and later
+   283 00000057 E85F00              <1>     call flip
+   284 0000005A 741C                <1>     jz   .fam
+   285 0000005C B504                <1>     mov  ch, 4
+   286 0000005E 66BB00002000        <1>     mov  ebx, 0x200000             ; ID flag: CPUID
+   287 00000064 E85200              <1>     call flip
+   288 00000067 740F                <1>     jz   .fam
+   289 00000069 51                  <1>     push cx
+   290 0000006A 66B801000000        <1>     mov  eax, 1
+   291 00000070 0FA2                <1>     db   0x0F, 0xA2                ; CPUID
+   292 00000072 59                  <1>     pop  cx
+   293 00000073 88E5                <1>     mov  ch, ah
+   294 00000075 80E50F              <1>     and  ch, 0x0F
+   295                              <1> .fam:
+   296 00000078 08CD                <1>     or   ch, cl
+   297 0000007A 882EF100            <1>     mov  [ST_CPU], ch
+   298 0000007E C606F20000          <1>     mov  byte [ST_FPU], 0          ; coprocessor: FNINIT/FNSTSW/FNSTCW probe
+   299 00000083 0F20C0              <1>     mov  eax, cr0
+   300 00000086 6650                <1>     push eax
+   301 00000088 24F3                <1>     and  al, 0xF3                  ; EM and TS clear
+   302 0000008A 0F22C0              <1>     mov  cr0, eax
+   303 0000008D DBE3                <1>     fninit
+   304 0000008F C706FC005A5A        <1>     mov  word [ST_MHZ], 0x5A5A
+   305 00000095 DD3EFC00            <1>     fnstsw [ST_MHZ]
+   306 00000099 803EFC0000          <1>     cmp  byte [ST_MHZ], 0
+   307 0000009E 7513                <1>     jne  .nofpu
+   308 000000A0 D93EFC00            <1>     fnstcw [ST_MHZ]
+   309 000000A4 A1FC00              <1>     mov  ax, [ST_MHZ]
+   310 000000A7 253F10              <1>     and  ax, 0x103F
+   311 000000AA 83F83F              <1>     cmp  ax, 0x003F
+   312 000000AD 7504                <1>     jne  .nofpu
+   313 000000AF FE06F200            <1>     inc  byte [ST_FPU]
+   314                              <1> .nofpu:
+   315 000000B3 6658                <1>     pop  eax
+   316 000000B5 0F22C0              <1>     mov  cr0, eax
+   317 000000B8 C3                  <1>     ret
+   318                              <1> 
+   319                              <1> ; ZF=0 if EFLAGS bit EBX can be toggled
+   320                              <1> flip:
+   321 000000B9 669C                <1>     pushfd
+   322 000000BB 6658                <1>     pop  eax
+   323 000000BD 6689C2              <1>     mov  edx, eax
+   324 000000C0 6631D8              <1>     xor  eax, ebx
+   325 000000C3 6650                <1>     push eax
+   326 000000C5 669D                <1>     popfd
+   327 000000C7 669C                <1>     pushfd
+   328 000000C9 6658                <1>     pop  eax
+   329 000000CB 6652                <1>     push edx
+   330 000000CD 669D                <1>     popfd
+   331 000000CF 6631D0              <1>     xor  eax, edx
+   332 000000D2 6685D8              <1>     test eax, ebx
+   333 000000D5 C3                  <1>     ret
+   334                              <1> 
+   335                              <1> ; ---------------------------------------------------------------------
+   336                              <1> ; rtc_now -> AX = minutes * 60 + seconds within the hour (RTC)
+   337                              <1> ; ---------------------------------------------------------------------
+   338                              <1> rtc_now:
+   339 000000D6 B002                <1>     mov  al, 0x02
+   340 000000D8 E80D00              <1>     call bcd_cmos                  ; minutes
+   341 000000DB B13C                <1>     mov  cl, 60
+   342 000000DD F6E1                <1>     mul  cl
+   343 000000DF 93                  <1>     xchg ax, bx
+   344 000000E0 30C0                <1>     xor  al, al
+   345 000000E2 E80300              <1>     call bcd_cmos                  ; seconds
+   346 000000E5 01D8                <1>     add  ax, bx
+   347 000000E7 C3                  <1>     ret
+   348                              <1> bcd_cmos:                          ; AL = CMOS register -> AX = binary
+   349 000000E8 E8(94EE)            <1>     call P_CMOSRD
+   350 000000EB 88C4                <1>     mov  ah, al
+   351 000000ED C0EC04              <1>     shr  ah, 4
+   352 000000F0 240F                <1>     and  al, 0x0F
+   353 000000F2 D50A                <1>     aad
+   354 000000F4 C3                  <1>     ret
+   355                              <1> 
+   356                              <1> ; ---------------------------------------------------------------------
+   357                              <1> ; video helpers
+   358                              <1> ; ---------------------------------------------------------------------
+   359                              <1> vid_es:                            ; ES = text buffer, [ST_SCH] = scheme
+   360 000000F5 B800B0              <1>     mov  ax, 0xB000
+   361 000000F8 B306                <1>     mov  bl, 6
+   362 000000FA 803E490007          <1>     cmp  byte [0x49], 7
+   363 000000FF 7411                <1>     je   .set
+   364 00000101 B037                <1>     mov  al, 0x37                  ; BUBios colour scheme (CMOS 37h)
+   365 00000103 E8(94EE)            <1>     call P_CMOSRD
+   366 00000106 83E00F              <1>     and  ax, 0x0F
+   367 00000109 B306                <1>     mov  bl, 6
+   368 0000010B F6F3                <1>     div  bl
+   369 0000010D 88E3                <1>     mov  bl, ah
+   370 0000010F B800B8              <1>     mov  ax, 0xB800
+   371                              <1> .set:
+   372 00000112 8EC0                <1>     mov  es, ax
+   373 00000114 881EF300            <1>     mov  [ST_SCH], bl
+   374 00000118 C3                  <1>     ret
+   375                              <1> 
+   376                              <1> attr:                              ; AL = attribute index -> AH = attribute
+   377 00000119 53                  <1>     push bx
+   378 0000011A 88C3                <1>     mov  bl, al
+   379 0000011C B009                <1>     mov  al, NATTR
+   380 0000011E F626F300            <1>     mul  byte [ST_SCH]
+   381 00000122 00D8                <1>     add  al, bl
+   382 00000124 89C3                <1>     mov  bx, ax
+   383 00000126 2E8AA7[0303]        <1>     mov  ah, [cs:bx+schemes]
+   384 0000012B 5B                  <1>     pop  bx
+   385 0000012C C3                  <1>     ret
+   386                              <1> 
+   387                              <1> goto:                              ; DX = row:column -> DI
+   388 0000012D 50                  <1>     push ax
+   389 0000012E B0A0                <1>     mov  al, 160
+   390 00000130 F6E6                <1>     mul  dh
+   391 00000132 89C7                <1>     mov  di, ax
+   392 00000134 0FB6C2              <1>     movzx ax, dl
+   393 00000137 01C7                <1>     add  di, ax
+   394 00000139 01C7                <1>     add  di, ax
+   395 0000013B 58                  <1>     pop  ax
+   396 0000013C C3                  <1>     ret
+   397                              <1> 
+   398                              <1> set_cursor:                        ; DX = row:column
+   399 0000013D B402                <1>     mov  ah, 2
+   400 0000013F 30FF                <1>     xor  bh, bh
+   401 00000141 CD10                <1>     int  0x10
+   402 00000143 C3                  <1>     ret
+   403                              <1> 
+   404                              <1> text_at:                           ; CS:SI at DX, attribute index AL
+   405 00000144 E8D2FF              <1>     call attr
+   406 00000147 E8E3FF              <1>     call goto
+   407                              <1> pstr:                              ; CS:SI -> ES:DI, attribute AH
+   408 0000014A 2EAC                <1>     cs lodsb
+   409 0000014C 08C0                <1>     or   al, al
+   410 0000014E 7403                <1>     jz   .r
+   411 00000150 AB                  <1>     stosw
+   412 00000151 EBF7                <1>     jmp  short pstr
+   413 00000153 C3                  <1> .r: ret
+   414                              <1> 
+   415                              <1> fill_at:                           ; CX x char AL at DX, attribute index BL
+   416 00000154 50                  <1>     push ax
+   417 00000155 88D8                <1>     mov  al, bl
+   418 00000157 E8BFFF              <1>     call attr
+   419 0000015A 5B                  <1>     pop  bx
+   420 0000015B 88D8                <1>     mov  al, bl
+   421 0000015D E8CDFF              <1>     call goto
+   422 00000160 F3AB                <1>     rep  stosw
+   423 00000162 C3                  <1>     ret
+   424                              <1> 
+   425                              <1> ; EAX unsigned -> ES:DI in attribute BH, right-aligned to CX columns
+   426                              <1> pdec:
+   427 00000163 56                  <1>     push si
+   428 00000164 89E6                <1>     mov  si, sp
+   429 00000166 6631D2              <1> .d: xor  edx, edx
+   430 00000169 6651                <1>     push ecx
+   431 0000016B 66B90A000000        <1>     mov  ecx, 10
+   432 00000171 66F7F1              <1>     div  ecx
+   433 00000174 6659                <1>     pop  ecx
+   434 00000176 52                  <1>     push dx
+   435 00000177 49                  <1>     dec  cx
+   436 00000178 6609C0              <1>     or   eax, eax
+   437 0000017B 75E9                <1>     jnz  .d
+   438 0000017D 88FC                <1>     mov  ah, bh
+   439 0000017F B020                <1>     mov  al, ' '
+   440 00000181 09C9                <1>     or   cx, cx
+   441 00000183 7E02                <1>     jle  .o
+   442 00000185 F3AB                <1>     rep  stosw
+   443 00000187 39F4                <1> .o: cmp  sp, si
+   444 00000189 7408                <1>     je   .e
+   445 0000018B 58                  <1>     pop  ax
+   446 0000018C 0430                <1>     add  al, '0'
+   447 0000018E 88FC                <1>     mov  ah, bh
+   448 00000190 AB                  <1>     stosw
+   449 00000191 EBF4                <1>     jmp  short .o
+   450 00000193 5E                  <1> .e: pop  si
+   451 00000194 C3                  <1>     ret
+   452                              <1> 
+   453                              <1> pnum:                              ; AX unsigned, as is
+   454 00000195 660FB7C0            <1>     movzx eax, ax
+   455 00000199 31C9                <1>     xor  cx, cx
+   456 0000019B EBC6                <1>     jmp  pdec
+   457                              <1> 
+   458                              <1> ; AX -> CX hex digits (from the top) at ES:DI, attribute BH
+   459                              <1> phex:
+   460 0000019D C1C004              <1> .l: rol  ax, 4
+   461 000001A0 50                  <1>     push ax
+   462 000001A1 240F                <1>     and  al, 0x0F
+   463 000001A3 0490                <1>     add  al, 0x90                  ; classic 0-9/A-F trick
+   464 000001A5 27                  <1>     daa
+   465 000001A6 1440                <1>     adc  al, 0x40
+   466 000001A8 27                  <1>     daa
+   467 000001A9 88FC                <1>     mov  ah, bh
+   468 000001AB AB                  <1>     stosw
+   469 000001AC 58                  <1>     pop  ax
+   470 000001AD E2EE                <1>     loop .l
+   471 000001AF C3                  <1>     ret
+   472                              <1> 
+   473                              <1> value_attr:                        ; BH = value attribute
+   474 000001B0 B003                <1>     mov  al, AT_VALUE
+   475 000001B2 E864FF              <1>     call attr
+   476 000001B5 88E7                <1>     mov  bh, ah
+   477 000001B7 C3                  <1>     ret
+   478                              <1> 
+   479                              <1> ; ---------------------------------------------------------------------
+   480                              <1> ; draw_all -- the complete screen from the current state
+   481                              <1> ; ---------------------------------------------------------------------
+   482                              <1> draw_all:
+   483 000001B8 E83AFF              <1>     call vid_es
+   484 000001BB B401                <1>     mov  ah, 1                     ; hide the cursor
+   485 000001BD B90020              <1>     mov  cx, 0x2000
+   486 000001C0 CD10                <1>     int  0x10
+   487 000001C2 B020                <1>     mov  al, ' '                   ; clear
+   488 000001C4 B300                <1>     mov  bl, AT_BG
+   489 000001C6 B9D007              <1>     mov  cx, 80*25
+   490 000001C9 31D2                <1>     xor  dx, dx
+   491 000001CB E886FF              <1>     call fill_at
+   492 000001CE B020                <1>     mov  al, ' '                   ; title bar
+   493 000001D0 B301                <1>     mov  bl, AT_TITLE
+   494 000001D2 B95000              <1>     mov  cx, 80
+   495 000001D5 E87CFF              <1>     call fill_at
+   496 000001D8 BE[4203]            <1>     mov  si, labels                ; titles and labels
+   497                              <1> .lab:
+   498 000001DB 2EAD                <1>     cs lodsw
+   499 000001DD 09C0                <1>     or   ax, ax
+   500 000001DF 740F                <1>     jz   .labd
+   501 000001E1 92                  <1>     xchg ax, dx                    ; DX = row:column
+   502 000001E2 2EAC                <1>     cs lodsb                       ; AL = attribute index
+   503 000001E4 56                  <1>     push si
+   504 000001E5 2E8B34              <1>     mov  si, [cs:si]               ; text
+   505 000001E8 E859FF              <1>     call text_at
+   506 000001EB 5E                  <1>     pop  si
+   507 000001EC 46                  <1>     inc  si
+   508 000001ED 46                  <1>     inc  si
+   509 000001EE EBEB                <1>     jmp  short .lab
+   510                              <1> .labd:
+   511 000001F0 B0C4                <1>     mov  al, 0xC4                  ; separator above the messages
+   512 000001F2 B305                <1>     mov  bl, AT_EMPTY
+   513 000001F4 B95000              <1>     mov  cx, 80
+   514 000001F7 BA0011              <1>     mov  dx, POS(R_LINE, 0)
+   515 000001FA E857FF              <1>     call fill_at
+   516 000001FD B020                <1>     mov  al, ' '                   ; message rows: AMI's teletype keeps the
+   517 000001FF B307                <1>     mov  bl, AT_ERR                 ; attribute, so errors come out red
+   518 00000201 B9E001              <1>     mov  cx, 80*6
+   519 00000204 BA0012              <1>     mov  dx, POS(R_MSG, 0)
+   520 00000207 E84AFF              <1>     call fill_at
+   521 0000020A BE[8805]            <1>     mov  si, s_amicopy             ; AMI's copyright line, where POST checks it
+   522 0000020D BA0015              <1>     mov  dx, POS(R_AMI, 0)
+   523 00000210 B002                <1>     mov  al, AT_LABEL
+   524 00000212 E82FFF              <1>     call text_at
+   525 00000215 BE[A605]            <1>     mov  si, s_bucopy
+   526 00000218 BA2D15              <1>     mov  dx, POS(R_AMI, 45)
+   527 0000021B B002                <1>     mov  al, AT_LABEL
+   528 0000021D E824FF              <1>     call text_at
+   529                              <1>     ; processor, coprocessor
+   530 00000220 A0F100              <1>     mov  al, [ST_CPU]
+   531 00000223 BE[8404]            <1>     mov  si, s_cx486dlc
+   532 00000226 A880                <1>     test al, 0x80
+   533 00000228 7409                <1>     jz   .intel
+   534 0000022A 3C83                <1>     cmp  al, 0x83
+   535 0000022C 7417                <1>     je   .cpu
+   536 0000022E BE[9104]            <1>     mov  si, s_cyrix
+   537 00000231 EB12                <1>     jmp  short .cpu
+   538                              <1> .intel:
+   539 00000233 2C03                <1>     sub  al, 3
+   540 00000235 3C03                <1>     cmp  al, 3
+   541 00000237 7202                <1>     jb   .i
+   542 00000239 B002                <1>     mov  al, 2
+   543 0000023B 98                  <1> .i: cbw
+   544 0000023C 89C3                <1>     mov  bx, ax
+   545 0000023E D1E3                <1>     shl  bx, 1
+   546 00000240 2E8BB7[8C02]        <1>     mov  si, [cs:bx+cpu_names]
+   547                              <1> .cpu:
+   548 00000245 BA0F02              <1>     mov  dx, POS(R_SYS, C_VAL)
+   549 00000248 E85100              <1>     call value_at
+   550 0000024B BE[B705]            <1>     mov  si, s_none
+   551 0000024E 803EF20000          <1>     cmp  byte [ST_FPU], 0
+   552 00000253 740D                <1>     je   .fpu
+   553 00000255 BE[9B04]            <1>     mov  si, s_fpu387
+   554 00000258 F606F1007C          <1>     test byte [ST_CPU], 0x7C       ; family 4 and up: on-chip
+   555 0000025D 7403                <1>     jz   .fpu
+   556 0000025F BE[A704]            <1>     mov  si, s_fpuint
+   557                              <1> .fpu:
+   558 00000262 BA3702              <1>     mov  dx, POS(R_SYS, C_RVAL)
+   559 00000265 E83400              <1>     call value_at
+   560 00000268 E83600              <1>     call draw_memory
+   561 0000026B E8F900              <1>     call draw_floppies
+   562 0000026E 30DB                <1>     xor  bl, bl
+   563 00000270 E89C01              <1>     call draw_disk
+   564 00000273 B301                <1>     mov  bl, 1
+   565 00000275 E89701              <1>     call draw_disk
+   566                              <1> draw_status:
+   567 00000278 B020                <1>     mov  al, ' '
+   568 0000027A B308                <1>     mov  bl, AT_STAT
+   569 0000027C B95000              <1>     mov  cx, 80
+   570 0000027F BA0018              <1>     mov  dx, POS(R_STAT, 0)
+   571 00000282 E8CFFE              <1>     call fill_at
+   572 00000285 8B36FA00            <1>     mov  si, [ST_STAT]
+   573 00000289 BA0118              <1>     mov  dx, POS(R_STAT, 1)
+   574 0000028C B008                <1>     mov  al, AT_STAT
+   575 0000028E E8B3FE              <1>     call text_at
+   576 00000291 BE7880              <1>     mov  si, S_BIOSID
+   577 00000294 BA2918              <1>     mov  dx, POS(R_STAT, 41)
+   578 00000297 B008                <1>     mov  al, AT_STAT
+   579 00000299 E9A8FE              <1>     jmp  text_at
+   580                              <1> 
+   581                              <1> value_at:
+   582 0000029C B003                <1>     mov  al, AT_VALUE
+   583 0000029E E9A3FE              <1>     jmp  text_at
+   584                              <1> 
+   585                              <1> ; ---------------------------------------------------------------------
+   586                              <1> ; draw_memory -- bar, block map and count from [ST_UNITS] / [ST_TOTAL]
+   587                              <1> ; ---------------------------------------------------------------------
+   588                              <1> draw_memory:
+   589 000002A1 8B0EF800            <1>     mov  cx, [ST_TOTAL]
+   590 000002A5 8B1EF600            <1>     mov  bx, [ST_UNITS]
+   591 000002A9 31C0                <1>     xor  ax, ax                    ; filled part of the bar
+   592 000002AB E30F                <1>     jcxz .bar
+   593 000002AD B82800              <1>     mov  ax, BAR_W
+   594 000002B0 F7E3                <1>     mul  bx
+   595 000002B2 F7F1                <1>     div  cx
+   596 000002B4 83F828              <1>     cmp  ax, BAR_W
+   597 000002B7 7603                <1>     jbe  .bar
+   598 000002B9 B82800              <1>     mov  ax, BAR_W
+   599                              <1> .bar:
+   600 000002BC 51                  <1>     push cx
+   601 000002BD 53                  <1>     push bx
+   602 000002BE 50                  <1>     push ax
+   603 000002BF 91                  <1>     xchg ax, cx
+   604 000002C0 B0DB                <1>     mov  al, 0xDB
+   605 000002C2 B304                <1>     mov  bl, AT_FILL
+   606 000002C4 BA0F07              <1>     mov  dx, POS(R_MEM, C_VAL)
+   607 000002C7 E88AFE              <1>     call fill_at
+   608 000002CA 58                  <1>     pop  ax
+   609 000002CB B92800              <1>     mov  cx, BAR_W
+   610 000002CE 29C1                <1>     sub  cx, ax
+   611 000002D0 B005                <1>     mov  al, AT_EMPTY
+   612 000002D2 E844FE              <1>     call attr
+   613 000002D5 B0B0                <1>     mov  al, 0xB0
+   614 000002D7 F3AB                <1>     rep  stosw
+   615 000002D9 E8D4FE              <1>     call value_attr                ; count
+   616 000002DC 660FB706F600        <1>     movzx eax, word [ST_UNITS]
+   617 000002E2 66C1E006            <1>     shl  eax, 6
+   618 000002E6 B90800              <1>     mov  cx, 8
+   619 000002E9 E877FE              <1>     call pdec
+   620 000002EC BE[AF04]            <1>     mov  si, s_kb
+   621 000002EF 88FC                <1>     mov  ah, bh
+   622 000002F1 E856FE              <1>     call pstr
+   623 000002F4 5B                  <1>     pop  bx
+   624 000002F5 59                  <1>     pop  cx
+   625                              <1>     ; block map: one cell per 1, 2, 4 ... MB, at most MAP_MAX cells
+   626 000002F6 51                  <1>     push cx
+   627 000002F7 53                  <1>     push bx
+   628 000002F8 B020                <1>     mov  al, ' '                   ; clear the row first (the scale can change)
+   629 000002FA B300                <1>     mov  bl, AT_BG
+   630 000002FC B94E00              <1>     mov  cx, 80 - C_LBL
+   631 000002FF BA0208              <1>     mov  dx, POS(R_MEM+1, C_LBL)
+   632 00000302 E84FFE              <1>     call fill_at
+   633 00000305 5B                  <1>     pop  bx
+   634 00000306 59                  <1>     pop  cx
+   635 00000307 E35D                <1>     jcxz .done
+   636 00000309 89C8                <1>     mov  ax, cx
+   637 0000030B 83C00F              <1>     add  ax, 15
+   638 0000030E C1E804              <1>     shr  ax, 4                     ; MB to show
+   639 00000311 BE1000              <1>     mov  si, 16                    ; blocks per cell
+   640 00000314 83F820              <1> .sc:cmp  ax, MAP_MAX
+   641 00000317 7607                <1>     jbe  .scok
+   642 00000319 40                  <1>     inc  ax
+   643 0000031A D1E8                <1>     shr  ax, 1
+   644 0000031C D1E6                <1>     shl  si, 1
+   645 0000031E EBF4                <1>     jmp  short .sc
+   646                              <1> .scok:
+   647 00000320 91                  <1>     xchg ax, cx                    ; CX = cells
+   648 00000321 BA0F08              <1>     mov  dx, POS(R_MEM+1, C_VAL)
+   649 00000324 E806FE              <1>     call goto
+   650 00000327 31D2                <1>     xor  dx, dx                    ; DX = first block of the cell
+   651                              <1> .cell:
+   652 00000329 B004                <1>     mov  al, AT_FILL                ; whole cell counted
+   653 0000032B 8D2C                <1>     lea  bp, [si]
+   654 0000032D 01D5                <1>     add  bp, dx
+   655 0000032F 39DD                <1>     cmp  bp, bx
+   656 00000331 7608                <1>     jbe  .c1
+   657 00000333 B006                <1>     mov  al, AT_ACCENT              ; being counted
+   658 00000335 39DA                <1>     cmp  dx, bx
+   659 00000337 7202                <1>     jb   .c1
+   660 00000339 B005                <1>     mov  al, AT_EMPTY               ; still to come
+   661 0000033B E8DBFD              <1> .c1:call attr
+   662 0000033E B0FE                <1>     mov  al, 0xFE
+   663 00000340 AB                  <1>     stosw
+   664 00000341 B020                <1>     mov  al, ' '
+   665 00000343 AB                  <1>     stosw
+   666 00000344 01F2                <1>     add  dx, si
+   667 00000346 E2E1                <1>     loop .cell
+   668 00000348 96                  <1>     xchg ax, si                    ; label = legend: "1 MB blocks"
+   669 00000349 C1E804              <1>     shr  ax, 4
+   670 0000034C BA0208              <1>     mov  dx, POS(R_MEM+1, C_LBL)
+   671 0000034F E8DBFD              <1>     call goto
+   672 00000352 50                  <1>     push ax
+   673 00000353 B002                <1>     mov  al, AT_LABEL
+   674 00000355 E8C1FD              <1>     call attr
+   675 00000358 88E7                <1>     mov  bh, ah
+   676 0000035A 58                  <1>     pop  ax
+   677 0000035B E837FE              <1>     call pnum
+   678 0000035E BE[B704]            <1>     mov  si, s_blocks
+   679 00000361 88FC                <1>     mov  ah, bh
+   680 00000363 E8E4FD              <1>     call pstr
+   681                              <1> .done:
+   682 00000366 C3                  <1>     ret
+   683                              <1> 
+   684                              <1> ; ---------------------------------------------------------------------
+   685                              <1> ; floppies from CMOS 10h (AMI's own drive names, 17-byte records)
+   686                              <1> ; ---------------------------------------------------------------------
+   687                              <1> draw_floppies:
+   688 00000367 B010                <1>     mov  al, 0x10
+   689 00000369 E8(94EE)            <1>     call P_CMOSRD
+   690 0000036C 50                  <1>     push ax
+   691 0000036D C0E804              <1>     shr  al, 4
+   692 00000370 BA0F0A              <1>     mov  dx, POS(R_FDD, C_VAL)
+   693 00000373 E80600              <1>     call .one
+   694 00000376 58                  <1>     pop  ax
+   695 00000377 240F                <1>     and  al, 0x0F
+   696 00000379 BA370A              <1>     mov  dx, POS(R_FDD, C_RVAL)
+   697                              <1> .one:
+   698 0000037C BE[B705]            <1>     mov  si, s_none
+   699 0000037F 08C0                <1>     or   al, al
+   700 00000381 740E                <1>     jz   .p
+   701 00000383 3C05                <1>     cmp  al, 5
+   702 00000385 770A                <1>     ja   .p
+   703 00000387 FEC8                <1>     dec  al
+   704 00000389 B411                <1>     mov  ah, 17
+   705 0000038B F6E4                <1>     mul  ah
+   706 0000038D 05356F              <1>     add  ax, S_FLOPPY
+   707 00000390 96                  <1>     xchg ax, si
+   708 00000391 E908FF              <1> .p: jmp  value_at
+   709                              <1> 
+   710                              <1> ; ---------------------------------------------------------------------
+   711                              <1> ; disk_geo: BL = 0 (C:) / 1 (D:) -> CF=1 none, else AL = type,
+   712                              <1> ;           CX = cylinders, BL = heads, BH = sectors
+   713                              <1> ; ---------------------------------------------------------------------
+   714                              <1> disk_geo:
+   715 00000394 B012                <1>     mov  al, 0x12
+   716 00000396 E8(94EE)            <1>     call P_CMOSRD
+   717 00000399 08DB                <1>     or   bl, bl
+   718 0000039B 7503                <1>     jnz  .d
+   719 0000039D C0E804              <1>     shr  al, 4
+   720 000003A0 240F                <1> .d: and  al, 0x0F
+   721 000003A2 3C0F                <1>     cmp  al, 0x0F
+   722 000003A4 7507                <1>     jne  .h
+   723 000003A6 B019                <1>     mov  al, 0x19
+   724 000003A8 00D8                <1>     add  al, bl
+   725 000003AA E8(94EE)            <1>     call P_CMOSRD
+   726 000003AD 08C0                <1> .h: or   al, al
+   727 000003AF 745C                <1>     jz   .none
+   728 000003B1 3C2F                <1>     cmp  al, 47
+   729 000003B3 7533                <1>     jne  .rom
+   730 000003B5 B41B                <1>     mov  ah, 0x1B                  ; type 47: CMOS 1Bh (C:) / 24h (D:)
+   731 000003B7 08DB                <1>     or   bl, bl
+   732 000003B9 7402                <1>     jz   .c
+   733 000003BB B424                <1>     mov  ah, 0x24
+   734 000003BD 50                  <1> .c: push ax
+   735 000003BE 88E0                <1>     mov  al, ah
+   736 000003C0 E8(94EE)            <1>     call P_CMOSRD                  ; cylinders low
+   737 000003C3 88C1                <1>     mov  cl, al
+   738 000003C5 58                  <1>     pop  ax
+   739 000003C6 50                  <1>     push ax
+   740 000003C7 88E0                <1>     mov  al, ah
+   741 000003C9 40                  <1>     inc  ax
+   742 000003CA E8(94EE)            <1>     call P_CMOSRD                  ; cylinders high
+   743 000003CD 88C5                <1>     mov  ch, al
+   744 000003CF 58                  <1>     pop  ax
+   745 000003D0 50                  <1>     push ax
+   746 000003D1 88E0                <1>     mov  al, ah
+   747 000003D3 0402                <1>     add  al, 2
+   748 000003D5 E8(94EE)            <1>     call P_CMOSRD                  ; heads
+   749 000003D8 88C3                <1>     mov  bl, al
+   750 000003DA 58                  <1>     pop  ax
+   751 000003DB 50                  <1>     push ax
+   752 000003DC 88E0                <1>     mov  al, ah
+   753 000003DE 0408                <1>     add  al, 8
+   754 000003E0 E8(94EE)            <1>     call P_CMOSRD                  ; sectors
+   755 000003E3 88C7                <1>     mov  bh, al
+   756 000003E5 58                  <1>     pop  ax
+   757 000003E6 EB19                <1>     jmp  short .chk
+   758                              <1> .rom:
+   759 000003E8 3C2E                <1>     cmp  al, 46
+   760 000003EA 7721                <1>     ja   .none
+   761 000003EC 50                  <1>     push ax
+   762 000003ED B410                <1>     mov  ah, 16
+   763 000003EF F6E4                <1>     mul  ah
+   764 000003F1 05F1E3              <1>     add  ax, 0xE3F1                ; ROM drive table, type 1 at E401
+   765 000003F4 96                  <1>     xchg ax, si
+   766 000003F5 58                  <1>     pop  ax
+   767 000003F6 2E8B0C              <1>     mov  cx, [cs:si]
+   768 000003F9 2E8A5C02            <1>     mov  bl, [cs:si+2]
+   769 000003FD 2E8A7C0E            <1>     mov  bh, [cs:si+0x0E]
+   770                              <1> .chk:
+   771 00000401 E30A                <1>     jcxz .none
+   772 00000403 08DB                <1>     or   bl, bl
+   773 00000405 7406                <1>     jz   .none
+   774 00000407 08FF                <1>     or   bh, bh
+   775 00000409 7402                <1>     jz   .none
+   776 0000040B F8                  <1>     clc
+   777 0000040C C3                  <1>     ret
+   778                              <1> .none:
+   779 0000040D F9                  <1>     stc
+   780 0000040E C3                  <1>     ret
+   781                              <1> 
+   782                              <1> ; ---------------------------------------------------------------------
+   783                              <1> ; draw_disk: BL = 0 (C:) / 1 (D:).  Row 1 (model) is filled by
+   784                              <1> ; bu_final; row 2: "Type 47  16000/16/63 > DOS 1002/255/63  7875 MB"
+   785                              <1> ; ---------------------------------------------------------------------
+   786                              <1> draw_disk:
+   787 0000040F B60B                <1>     mov  dh, R_HDC
+   788 00000411 00DE                <1>     add  dh, bl
+   789 00000413 00DE                <1>     add  dh, bl
+   790 00000415 B20F                <1>     mov  dl, C_VAL
+   791 00000417 52                  <1>     push dx
+   792 00000418 E879FF              <1>     call disk_geo
+   793 0000041B 5A                  <1>     pop  dx
+   794 0000041C 7306                <1>     jnc  .yes
+   795 0000041E BE[B705]            <1>     mov  si, s_none
+   796 00000421 E978FE              <1>     jmp  value_at
+   797                              <1> .yes:
+   798 00000424 FEC6                <1>     inc  dh
+   799 00000426 53                  <1>     push bx                        ; BL = heads, BH = sectors
+   800 00000427 51                  <1>     push cx                        ; cylinders
+   801 00000428 50                  <1>     push ax                        ; AL = type
+   802 00000429 BE[C204]            <1>     mov  si, s_type
+   803 0000042C B002                <1>     mov  al, AT_LABEL
+   804 0000042E E813FD              <1>     call text_at
+   805 00000431 E87CFD              <1>     call value_attr                ; BH = value attribute from here on
+   806 00000434 58                  <1>     pop  ax
+   807 00000435 0FB6C0              <1>     movzx ax, al
+   808 00000438 E85AFD              <1>     call pnum                      ; type number
+   809 0000043B 83C704              <1>     add  di, 4
+   810 0000043E 59                  <1>     pop  cx
+   811 0000043F 58                  <1>     pop  ax                        ; AL = heads, AH = sectors
+   812 00000440 50                  <1>     push ax
+   813 00000441 51                  <1>     push cx
+   814 00000442 E86500              <1>     call pchs                      ; physical geometry
+   815 00000445 59                  <1>     pop  cx
+   816 00000446 58                  <1>     pop  ax
+   817 00000447 50                  <1>     push ax
+   818 00000448 51                  <1>     push cx
+   819 00000449 81F90004            <1>     cmp  cx, 1024
+   820 0000044D 7631                <1>     jbe  .size
+   821 0000044F 50                  <1>     push ax                        ; DOS geometry through ECHS
+   822 00000450 BE[C804]            <1>     mov  si, s_arrow
+   823 00000453 88FC                <1>     mov  ah, bh
+   824 00000455 E8F2FC              <1>     call pstr
+   825 00000458 58                  <1>     pop  ax
+   826 00000459 50                  <1>     push ax
+   827 0000045A 0FB6E8              <1>     movzx bp, al                   ; BP = physical heads
+   828 0000045D 51                  <1>     push cx
+   829 0000045E 89C8                <1>     mov  ax, cx
+   830 00000460 89E9                <1>     mov  cx, bp
+   831 00000462 E8(F576)            <1>     call 0x76F5                    ; ECHS calc_factor: AX = heads DOS sees
+   832 00000465 89C6                <1>     mov  si, ax
+   833 00000467 58                  <1>     pop  ax
+   834 00000468 F7E5                <1>     mul  bp                        ; cylinders * heads / DOS heads - 1,
+   835 0000046A F7F6                <1>     div  si                        ; as the setup's Summary page shows it
+   836 0000046C 48                  <1>     dec  ax
+   837 0000046D 3D0004              <1>     cmp  ax, 1024
+   838 00000470 7603                <1>     jbe  .lc
+   839 00000472 B80004              <1>     mov  ax, 1024
+   840 00000475 91                  <1> .lc:xchg ax, cx
+   841 00000476 58                  <1>     pop  ax                        ; AH = sectors
+   842 00000477 96                  <1>     xchg ax, si                    ; AL = DOS heads
+   843 00000478 92                  <1>     xchg ax, dx
+   844 00000479 89F0                <1>     mov  ax, si
+   845 0000047B 88D0                <1>     mov  al, dl
+   846 0000047D E82A00              <1>     call pchs
+   847                              <1> .size:
+   848 00000480 83C704              <1>     add  di, 4                     ; capacity in MB = C*H*S / 2048
+   849 00000483 59                  <1>     pop  cx
+   850 00000484 58                  <1>     pop  ax
+   851 00000485 660FB6D0            <1>     movzx edx, al                  ; heads
+   852 00000489 660FB6F4            <1>     movzx esi, ah                  ; sectors
+   853 0000048D 660FB7C1            <1>     movzx eax, cx
+   854 00000491 660FAFC2            <1>     imul eax, edx
+   855 00000495 660FAFC6            <1>     imul eax, esi
+   856 00000499 66C1E80B            <1>     shr  eax, 11
+   857 0000049D 31C9                <1>     xor  cx, cx
+   858 0000049F E8C1FC              <1>     call pdec
+   859 000004A2 BE[B304]            <1>     mov  si, s_mb
+   860 000004A5 88FC                <1>     mov  ah, bh
+   861 000004A7 E9A0FC              <1>     jmp  pstr
+   862                              <1> 
+   863                              <1> ; CX = cylinders, AL = heads, AH = sectors -> "c/h/s" at ES:DI, attr BH
+   864                              <1> pchs:
+   865 000004AA 50                  <1>     push ax
+   866 000004AB 91                  <1>     xchg ax, cx
+   867 000004AC E8E6FC              <1>     call pnum
+   868 000004AF E81100              <1>     call slash
+   869 000004B2 58                  <1>     pop  ax
+   870 000004B3 50                  <1>     push ax
+   871 000004B4 30E4                <1>     xor  ah, ah
+   872 000004B6 E8DCFC              <1>     call pnum
+   873 000004B9 E80700              <1>     call slash
+   874 000004BC 58                  <1>     pop  ax
+   875 000004BD C1E808              <1>     shr  ax, 8
+   876 000004C0 E9D2FC              <1>     jmp  pnum
+   877                              <1> slash:
+   878 000004C3 B02F                <1>     mov  al, '/'
+   879 000004C5 88FC                <1>     mov  ah, bh
+   880 000004C7 AB                  <1>     stosw
+   881 000004C8 C3                  <1>     ret
+   882                              <1> 
+   883                              <1> 
+   884                              <1> 
+   885                              <1> post2_end:
+   886                              <1> 
+   887                              <1> ; =====================================================================
+   888                              <1> section post3 start=0x2400 vstart=0x429D
+   889                              <1> ; =====================================================================
+   890                              <1> 
+   891                              <1> ; ---------------------------------------------------------------------
+   892                              <1> ; bu_final -- replaces AMI's configuration box, last thing before INT 19h
+   893                              <1> ; ---------------------------------------------------------------------
+   894                              <1> bu_final:
+   895 00000000 E8(8100)            <1>     call enter
+   896 00000003 803EF000B2          <1>     cmp  byte [ST_FLAG], FLAG_UP
+   897 00000008 0F85F001            <1>     jne  .out
+   898 0000000C E8(F500)            <1>     call vid_es
+   899 0000000F B031                <1>     mov  al, 0x31                  ; memory: as found by POST (CMOS 31h:30h)
+   900 00000011 E8(94EE)            <1>     call P_CMOSRD
+   901 00000014 88C4                <1>     mov  ah, al
+   902 00000016 B030                <1>     mov  al, 0x30
+   903 00000018 E8(94EE)            <1>     call P_CMOSRD
+   904 0000001B C1E806              <1>     shr  ax, 6
+   905 0000001E 83C010              <1>     add  ax, 16
+   906 00000021 A3F600              <1>     mov  [ST_UNITS], ax
+   907 00000024 A3F800              <1>     mov  [ST_TOTAL], ax
+   908 00000027 E8(A102)            <1>     call draw_memory
+   909 0000002A E84B02              <1>     call measure_clock
+   910                              <1>     ; clock
+   911 0000002D BA0F03              <1>     mov  dx, POS(R_SYS+1, C_VAL)
+   912 00000030 E8(2D01)            <1>     call goto
+   913 00000033 E8(B001)            <1>     call value_attr
+   914 00000036 A1FC00              <1>     mov  ax, [ST_MHZ]
+   915 00000039 31D2                <1>     xor  dx, dx
+   916 0000003B B90A00              <1>     mov  cx, 10
+   917 0000003E F7F1                <1>     div  cx
+   918 00000040 52                  <1>     push dx
+   919 00000041 E8(9501)            <1>     call pnum
+   920 00000044 B02E                <1>     mov  al, '.'
+   921 00000046 AB                  <1>     stosw
+   922 00000047 58                  <1>     pop  ax
+   923 00000048 0430                <1>     add  al, '0'
+   924 0000004A 88FC                <1>     mov  ah, bh
+   925 0000004C AB                  <1>     stosw
+   926 0000004D BE[AA05]            <1>     mov  si, s_mhz
+   927 00000050 E8(4A01)            <1>     call pstr
+   928                              <1>     ; external cache (OPTi register 21h, as AMI reads it)
+   929 00000053 BA3703              <1>     mov  dx, POS(R_SYS+1, C_RVAL)
+   930 00000056 E8(2D01)            <1>     call goto
+   931 00000059 B021                <1>     mov  al, 0x21
+   932 0000005B E8(E38E)            <1>     call P_CHIPRD
+   933 0000005E BE[D004]            <1>     mov  si, s_disabled
+   934 00000061 A810                <1>     test al, 0x10
+   935 00000063 7412                <1>     jz   .nocache
+   936 00000065 240C                <1>     and  al, 0x0C
+   937 00000067 C0E802              <1>     shr  al, 2
+   938 0000006A 88C1                <1>     mov  cl, al
+   939 0000006C B84000              <1>     mov  ax, 64
+   940 0000006F D3E0                <1>     shl  ax, cl
+   941 00000071 E8(9501)            <1>     call pnum
+   942 00000074 BE[AF04]            <1>     mov  si, s_kb
+   943                              <1> .nocache:
+   944 00000077 88FC                <1>     mov  ah, bh
+   945 00000079 E8(4A01)            <1>     call pstr
+   946                              <1>     ; shadow RAM (CMOS 35h: 04h video C000, 08h system F000)
+   947 0000007C BA3704              <1>     mov  dx, POS(R_SYS+2, C_RVAL)
+   948 0000007F E8(2D01)            <1>     call goto
+   949 00000082 B035                <1>     mov  al, 0x35
+   950 00000084 E8(94EE)            <1>     call P_CMOSRD
+   951 00000087 240C                <1>     and  al, 0x0C
+   952 00000089 BE[D004]            <1>     mov  si, s_disabled
+   953 0000008C 741F                <1>     jz   .shp
+   954 0000008E 88C1                <1>     mov  cl, al
+   955 00000090 BE[D904]            <1>     mov  si, s_video
+   956 00000093 F6C104              <1>     test cl, 0x04
+   957 00000096 7412                <1>     jz   .sys
+   958 00000098 88FC                <1>     mov  ah, bh
+   959 0000009A E8(4A01)            <1>     call pstr
+   960 0000009D BE[E604]            <1>     mov  si, s_plus
+   961 000000A0 F6C108              <1>     test cl, 0x08
+   962 000000A3 740D                <1>     jz   .shd
+   963 000000A5 88FC                <1>     mov  ah, bh
+   964 000000A7 E8(4A01)            <1>     call pstr
+   965                              <1> .sys:
+   966 000000AA BE[DF04]            <1>     mov  si, s_system
+   967                              <1> .shp:
+   968 000000AD 88FC                <1>     mov  ah, bh
+   969 000000AF E8(4A01)            <1>     call pstr
+   970                              <1> .shd:
+   971                              <1>     ; RTC battery (CMOS 0Dh bit 7 = valid)
+   972 000000B2 B00D                <1>     mov  al, 0x0D
+   973 000000B4 E8(94EE)            <1>     call P_CMOSRD
+   974 000000B7 BE[EA04]            <1>     mov  si, s_ok
+   975 000000BA A880                <1>     test al, 0x80
+   976 000000BC 7503                <1>     jnz  .bat
+   977 000000BE BE[ED04]            <1>     mov  si, s_low
+   978                              <1> .bat:
+   979 000000C1 BA3705              <1>     mov  dx, POS(R_SYS+3, C_RVAL)
+   980 000000C4 E8(9C02)            <1>     call value_at
+   981                              <1>     ; disk model names
+   982 000000C7 30DB                <1>     xor  bl, bl
+   983 000000C9 E84401              <1>     call disk_name
+   984 000000CC B301                <1>     mov  bl, 1
+   985 000000CE E83F01              <1>     call disk_name
+   986                              <1>     ; serial and parallel ports from the BDA
+   987 000000D1 BA0F0F              <1>     mov  dx, POS(R_PORTS, C_VAL)
+   988 000000D4 E8(2D01)            <1>     call goto
+   989 000000D7 E8(B001)            <1>     call value_attr
+   990 000000DA 31F6                <1>     xor  si, si
+   991 000000DC 31ED                <1>     xor  bp, bp
+   992                              <1> .port:
+   993 000000DE 8B04                <1>     mov  ax, [si]
+   994 000000E0 09C0                <1>     or   ax, ax
+   995 000000E2 7424                <1>     jz   .pn
+   996 000000E4 45                  <1>     inc  bp
+   997 000000E5 56                  <1>     push si
+   998 000000E6 D1E6                <1>     shl  si, 1
+   999 000000E8 81C6[A303]          <1>     add  si, port_names
+  1000 000000EC B90400              <1>     mov  cx, 4
+  1001 000000EF 2EAC                <1> .pc:cs lodsb
+  1002 000000F1 88FC                <1>     mov  ah, bh
+  1003 000000F3 AB                  <1>     stosw
+  1004 000000F4 E2F9                <1>     loop .pc
+  1005 000000F6 5E                  <1>     pop  si
+  1006 000000F7 B020                <1>     mov  al, ' '
+  1007 000000F9 AB                  <1>     stosw
+  1008 000000FA 8B04                <1>     mov  ax, [si]
+  1009 000000FC C1E004              <1>     shl  ax, 4
+  1010 000000FF B90300              <1>     mov  cx, 3
+  1011 00000102 E8(9D01)            <1>     call phex
+  1012 00000105 83C704              <1>     add  di, 4
+  1013 00000108 46                  <1> .pn:inc  si
+  1014 00000109 46                  <1>     inc  si
+  1015 0000010A 83FE0E              <1>     cmp  si, 14
+  1016 0000010D 72CF                <1>     jb   .port
+  1017 0000010F 09ED                <1>     or   bp, bp
+  1018 00000111 7506                <1>     jnz  .roms
+  1019 00000113 BE[B705]            <1>     mov  si, s_none
+  1020 00000116 E8F200              <1>     call pstr_v
+  1021                              <1> .roms:
+  1022                              <1>     ; option ROMs: C000-EFFF in 2 KB steps
+  1023 00000119 BA0F10              <1>     mov  dx, POS(R_ROMS, C_VAL)
+  1024 0000011C E8(2D01)            <1>     call goto
+  1025 0000011F 31ED                <1>     xor  bp, bp
+  1026 00000121 B800C0              <1>     mov  ax, 0xC000
+  1027                              <1> .rom:
+  1028 00000124 8EE8                <1>     mov  gs, ax
+  1029 00000126 B98000              <1>     mov  cx, 0x80
+  1030 00000129 65813E000055AA      <1>     cmp  word [gs:0], 0xAA55
+  1031 00000130 7534                <1>     jne  .rn
+  1032 00000132 45                  <1>     inc  bp
+  1033 00000133 50                  <1>     push ax
+  1034 00000134 B90400              <1>     mov  cx, 4
+  1035 00000137 E8(9D01)            <1>     call phex
+  1036 0000013A B82000              <1>     mov  ax, ' '
+  1037 0000013D 88FC                <1>     mov  ah, bh
+  1038 0000013F AB                  <1>     stosw
+  1039 00000140 650FB6060200        <1>     movzx ax, byte [gs:2]
+  1040 00000146 D1E8                <1>     shr  ax, 1
+  1041 00000148 E8(9501)            <1>     call pnum
+  1042 0000014B B04B                <1>     mov  al, 'K'
+  1043 0000014D 88FC                <1>     mov  ah, bh
+  1044 0000014F AB                  <1>     stosw
+  1045 00000150 83C704              <1>     add  di, 4
+  1046 00000153 58                  <1>     pop  ax
+  1047 00000154 650FB60E0200        <1>     movzx cx, byte [gs:2]
+  1048 0000015A 83C103              <1>     add  cx, 3
+  1049 0000015D C1E902              <1>     shr  cx, 2
+  1050 00000160 7501                <1>     jnz  .r2
+  1051 00000162 41                  <1>     inc  cx
+  1052 00000163 C1E107              <1> .r2:shl  cx, 7
+  1053 00000166 01C8                <1> .rn:add  ax, cx
+  1054 00000168 3D00F0              <1>     cmp  ax, 0xF000
+  1055 0000016B 72B7                <1>     jb   .rom
+  1056 0000016D 09ED                <1>     or   bp, bp
+  1057 0000016F 7506                <1>     jnz  .stat
+  1058 00000171 BE[B705]            <1>     mov  si, s_none
+  1059 00000174 E89400              <1>     call pstr_v
+  1060                              <1> .stat:
+  1061                              <1>     ; status: boot order and the time POST took
+  1062 00000177 C706FA00[5805]      <1>     mov  word [ST_STAT], s_st_bootc
+  1063 0000017D 2EA070B8            <1>     mov  al, [cs:O_BOOTSEQ]
+  1064 00000181 E8(0083)            <1>     call P_OPTION
+  1065 00000184 7406                <1>     jz   .bc
+  1066 00000186 C706FA00[6C05]      <1>     mov  word [ST_STAT], s_st_boota
+  1067 0000018C E8(7802)            <1> .bc:call draw_status
+  1068 0000018F BA1718              <1>     mov  dx, POS(R_STAT, 23)
+  1069 00000192 E8(2D01)            <1>     call goto
+  1070 00000195 B008                <1>     mov  al, AT_STAT
+  1071 00000197 E8(1901)            <1>     call attr
+  1072 0000019A 88E7                <1>     mov  bh, ah
+  1073 0000019C 53                  <1>     push bx
+  1074 0000019D E8(D600)            <1>     call rtc_now
+  1075 000001A0 5B                  <1>     pop  bx
+  1076 000001A1 833EF400FF          <1>     cmp  word [ST_T0], 0xFFFF
+  1077 000001A6 7423                <1>     je   .notime
+  1078 000001A8 2B06F400            <1>     sub  ax, [ST_T0]
+  1079 000001AC 7903                <1>     jns  .t
+  1080 000001AE 05100E              <1>     add  ax, 3600
+  1081 000001B1 3D5802              <1> .t: cmp  ax, 600                   ; an implausible time (RTC not set) is
+  1082 000001B4 7315                <1>     jae  .notime                   ; not shown
+  1083 000001B6 50                  <1>     push ax
+  1084 000001B7 BE[8005]            <1>     mov  si, s_post
+  1085 000001BA 88FC                <1>     mov  ah, bh
+  1086 000001BC E8(4A01)            <1>     call pstr
+  1087 000001BF 58                  <1>     pop  ax
+  1088 000001C0 E8(9501)            <1>     call pnum
+  1089 000001C3 BE[C905]            <1>     mov  si, s_sec
+  1090 000001C6 88FC                <1>     mov  ah, bh
+  1091 000001C8 E8(4A01)            <1>     call pstr
+  1092                              <1> .notime:
+  1093                              <1>     ; message rows back to normal for the boot, cursor below the summary
+  1094 000001CB B020                <1>     mov  al, ' '
+  1095 000001CD B300                <1>     mov  bl, AT_BG
+  1096 000001CF B9F000              <1>     mov  cx, 80*3
+  1097 000001D2 BA0012              <1>     mov  dx, POS(R_MSG, 0)
+  1098 000001D5 E8(5401)            <1>     call fill_at
+  1099 000001D8 B020                <1>     mov  al, ' '
+  1100 000001DA B300                <1>     mov  bl, AT_BG
+  1101 000001DC B9A000              <1>     mov  cx, 80*2
+  1102 000001DF BA0016              <1>     mov  dx, POS(R_AMI+1, 0)
+  1103 000001E2 E8(5401)            <1>     call fill_at
+  1104 000001E5 B90706              <1>     mov  cx, 0x0607
+  1105 000001E8 803EF30006          <1>     cmp  byte [ST_SCH], 6
+  1106 000001ED 7503                <1>     jne  .cs
+  1107 000001EF B90C0B              <1>     mov  cx, 0x0B0C
+  1108 000001F2 B401                <1> .cs:mov  ah, 1
+  1109 000001F4 CD10                <1>     int  0x10
+  1110 000001F6 BA0012              <1>     mov  dx, POS(R_MSG, 0)
+  1111 000001F9 E8(3D01)            <1>     call set_cursor
+  1112                              <1> .out:
+  1113 000001FC 1E                  <1>     push ds                        ; clear the BDA inter-application area
+  1114 000001FD 07                  <1>     pop  es
+  1115 000001FE BFF000              <1>     mov  di, ST_FLAG
+  1116 00000201 B90800              <1>     mov  cx, 8
+  1117 00000204 31C0                <1>     xor  ax, ax
+  1118 00000206 F3AB                <1>     rep  stosw
+  1119 00000208 E9(7A00)            <1>     jmp  hook_ret
+  1120                              <1> 
+  1121                              <1> pstr_v:
+  1122 0000020B 88FC                <1>     mov  ah, bh
+  1123 0000020D E9(4A01)            <1>     jmp  pstr
+  1124                              <1> 
+  1125                              <1> ; ---------------------------------------------------------------------
+  1126                              <1> ; disk_name: BL = 0 (C:) / 1 (D:) -- IDENTIFY the drive, show its model
+  1127                              <1> ; ---------------------------------------------------------------------
+  1128                              <1> disk_name:
+  1129 00000210 B60B                <1>     mov  dh, R_HDC
+  1130 00000212 00DE                <1>     add  dh, bl
+  1131 00000214 00DE                <1>     add  dh, bl
+  1132 00000216 B20F                <1>     mov  dl, C_VAL
+  1133 00000218 52                  <1>     push dx
+  1134 00000219 53                  <1>     push bx
+  1135 0000021A E8(9403)            <1>     call disk_geo
+  1136 0000021D 5B                  <1>     pop  bx
+  1137 0000021E 5A                  <1>     pop  dx
+  1138 0000021F 7243                <1>     jc   .r
+  1139 00000221 06                  <1>     push es
+  1140 00000222 6A00                <1>     push 0
+  1141 00000224 07                  <1>     pop  es
+  1142 00000225 88DA                <1>     mov  dl, bl
+  1143 00000227 80CA80              <1>     or   dl, 0x80
+  1144 0000022A 53                  <1>     push bx
+  1145 0000022B BB007E              <1>     mov  bx, IDBUF
+  1146 0000022E B400                <1>     mov  ah, 0
+  1147 00000230 E8(07AF)            <1>     call P_IDEID
+  1148 00000233 5B                  <1>     pop  bx
+  1149 00000234 07                  <1>     pop  es
+  1150 00000235 B60B                <1>     mov  dh, R_HDC
+  1151 00000237 00DE                <1>     add  dh, bl
+  1152 00000239 00DE                <1>     add  dh, bl
+  1153 0000023B B20F                <1>     mov  dl, C_VAL
+  1154 0000023D BE[F104]            <1>     mov  si, s_noid
+  1155 00000240 B002                <1>     mov  al, AT_LABEL
+  1156 00000242 0F82(4401)          <1>     jc   text_at
+  1157 00000246 E8(2D01)            <1>     call goto
+  1158 00000249 E8(B001)            <1>     call value_attr
+  1159 0000024C 6A00                <1>     push 0
+  1160 0000024E 0FA1                <1>     pop  fs
+  1161 00000250 B92800              <1>     mov  cx, 40                    ; model: words 27-46, bytes swapped
+  1162                              <1> .trim:
+  1163 00000253 89CE                <1>     mov  si, cx
+  1164 00000255 4E                  <1>     dec  si
+  1165 00000256 83F601              <1>     xor  si, 1
+  1166 00000259 648A84367E          <1>     mov  al, [fs:si+IDBUF+54]
+  1167 0000025E 3C20                <1>     cmp  al, ' '
+  1168 00000260 7703                <1>     ja   .show
+  1169 00000262 E2EF                <1>     loop .trim
+  1170 00000264 C3                  <1> .r: ret
+  1171                              <1> .show:
+  1172 00000265 31F6                <1>     xor  si, si
+  1173 00000267 56                  <1> .ch:push si
+  1174 00000268 83F601              <1>     xor  si, 1
+  1175 0000026B 648A84367E          <1>     mov  al, [fs:si+IDBUF+54]
+  1176 00000270 5E                  <1>     pop  si
+  1177 00000271 88FC                <1>     mov  ah, bh
+  1178 00000273 AB                  <1>     stosw
+  1179 00000274 46                  <1>     inc  si
+  1180 00000275 E2F0                <1>     loop .ch
+  1181 00000277 C3                  <1>     ret
+  1182                              <1> 
+  1183                              <1> ; ---------------------------------------------------------------------
+  1184                              <1> ; measure_clock -> [ST_MHZ] (MHz x 10), with the setup's method: the
+  1185                              <1> ; timing loop runs from RAM (copied to 0:7C00), timed by PIT channel 2
+  1186                              <1> ; ---------------------------------------------------------------------
+  1187                              <1> measure_clock:
+  1188 00000278 1E                  <1>     push ds
+  1189 00000279 06                  <1>     push es
+  1190 0000027A 0E                  <1>     push cs
+  1191 0000027B 1F                  <1>     pop  ds
+  1192 0000027C 68C007              <1>     push TLOOP_SEG
+  1193 0000027F 07                  <1>     pop  es
+  1194 00000280 BE[0000]            <1>     mov  si, bu_tloop
+  1195 00000283 31FF                <1>     xor  di, di
+  1196 00000285 B91E00              <1>     mov  cx, bu_tloop_end - bu_tloop
+  1197 00000288 F3A4                <1>     rep  movsb
+  1198 0000028A 07                  <1>     pop  es
+  1199 0000028B 1F                  <1>     pop  ds
+  1200 0000028C FA                  <1>     cli
+  1201 0000028D E461                <1>     in   al, 0x61
+  1202 0000028F 50                  <1>     push ax
+  1203 00000290 24FC                <1>     and  al, 0xFC
+  1204 00000292 E661                <1>     out  0x61, al
+  1205 00000294 B0B0                <1>     mov  al, 0xB0
+  1206 00000296 E643                <1>     out  0x43, al
+  1207 00000298 B0FF                <1>     mov  al, 0xFF
+  1208 0000029A E642                <1>     out  0x42, al
+  1209 0000029C E642                <1>     out  0x42, al
+  1210 0000029E E461                <1>     in   al, 0x61
+  1211 000002A0 0C01                <1>     or   al, 1
+  1212 000002A2 E661                <1>     out  0x61, al
+  1213 000002A4 9A0000C007          <1>     call TLOOP_SEG:0
+  1214 000002A9 B080                <1>     mov  al, 0x80
+  1215 000002AB E643                <1>     out  0x43, al
+  1216 000002AD E442                <1>     in   al, 0x42
+  1217 000002AF 88C4                <1>     mov  ah, al
+  1218 000002B1 E442                <1>     in   al, 0x42
+  1219 000002B3 86C4                <1>     xchg al, ah
+  1220 000002B5 F7D0                <1>     not  ax
+  1221 000002B7 93                  <1>     xchg ax, bx                    ; BX = elapsed PIT ticks
+  1222 000002B8 58                  <1>     pop  ax
+  1223 000002B9 E661                <1>     out  0x61, al
+  1224 000002BB FB                  <1>     sti
+  1225 000002BC 31F6                <1>     xor  si, si                    ; K for 386 / 486 / 586+
+  1226 000002BE A0F100              <1>     mov  al, [ST_CPU]
+  1227 000002C1 247F                <1>     and  al, 0x7F
+  1228 000002C3 3C04                <1>     cmp  al, 4
+  1229 000002C5 7208                <1>     jb   .k
+  1230 000002C7 BE0400              <1>     mov  si, 4
+  1231 000002CA 7403                <1>     je   .k
+  1232 000002CC BE0800              <1>     mov  si, 8
+  1233 000002CF 2E668B84[8B01]      <1> .k: mov  eax, [cs:si+clock_k]
+  1234 000002D5 6631D2              <1>     xor  edx, edx
+  1235 000002D8 660FB7DB            <1>     movzx ebx, bx
+  1236 000002DC 09DB                <1>     or   bx, bx
+  1237 000002DE 741F                <1>     jz   .st
+  1238 000002E0 66F7F3              <1>     div  ebx
+  1239 000002E3 BE[9701]            <1>     mov  si, clock_std             ; snap to a standard clock within 1/16
+  1240 000002E6 2E8B0C              <1> .sn:mov  cx, [cs:si]
+  1241 000002E9 E314                <1>     jcxz .st
+  1242 000002EB 46                  <1>     inc  si
+  1243 000002EC 46                  <1>     inc  si
+  1244 000002ED 89C2                <1>     mov  dx, ax
+  1245 000002EF 29CA                <1>     sub  dx, cx
+  1246 000002F1 7902                <1>     jns  .abs
+  1247 000002F3 F7DA                <1>     neg  dx
+  1248                              <1> .abs:
+  1249 000002F5 89CB                <1>     mov  bx, cx
+  1250 000002F7 C1EB04              <1>     shr  bx, 4
+  1251 000002FA 39DA                <1>     cmp  dx, bx
+  1252 000002FC 77E8                <1>     ja   .sn
+  1253 000002FE 91                  <1>     xchg ax, cx
+  1254 000002FF A3FC00              <1> .st:mov  [ST_MHZ], ax
+  1255 00000302 C3                  <1>     ret
+  1256                              <1> 
+  1257                              <1> ; ---------------------------------------------------------------------
+  1258                              <1> ; tables and texts
+  1259                              <1> ; ---------------------------------------------------------------------
+  1260                              <1> ; attributes per scheme: BG TITLE LABEL VALUE FILL EMPTY ACCENT ERR STAT
+  1261                              <1> schemes:
+  1262 00000303 0730030B0B080A0C30  <1>     db 0x07, 0x30, 0x03, 0x0B, 0x0B, 0x08, 0x0A, 0x0C, 0x30   ; teal
+  1263 0000030C 0760060E0E080F0C60  <1>     db 0x07, 0x60, 0x06, 0x0E, 0x0E, 0x08, 0x0F, 0x0C, 0x60   ; amber
+  1264 00000315 0720020A0A080F0C20  <1>     db 0x07, 0x20, 0x02, 0x0A, 0x0A, 0x08, 0x0F, 0x0C, 0x20   ; green
+  1265 0000031E 1770171F1E191A1C70  <1>     db 0x17, 0x70, 0x17, 0x1F, 0x1E, 0x19, 0x1A, 0x1C, 0x70   ; classic blue
+  1266 00000327 0770070F0F080A0C70  <1>     db 0x07, 0x70, 0x07, 0x0F, 0x0F, 0x08, 0x0A, 0x0C, 0x70   ; grey
+  1267 00000330 1770171F1E191A1C70  <1>     db 0x17, 0x70, 0x17, 0x1F, 0x1E, 0x19, 0x1A, 0x1C, 0x70   ; AMI
+  1268 00000339 0770070F0F070F0F70  <1>     db 0x07, 0x70, 0x07, 0x0F, 0x0F, 0x07, 0x0F, 0x0F, 0x70   ; monochrome
+  1269                              <1> 
+  1270                              <1> ; row:column, attribute index, text
+  1271                              <1> labels:
+  1272 00000342 0100                <1>     dw POS(0, 1)
+  1273 00000344 01                  <1>     db AT_TITLE
+  1274 00000345 [BF03]              <1>     dw ps_title
+  1275 00000347 2E00                <1>     dw POS(0, 46)
+  1276 00000349 01                  <1>     db AT_TITLE
+  1277 0000034A [E103]              <1>     dw ps_title_r
+  1278 0000034C 0202                <1>     dw POS(R_SYS, C_LBL)
+  1279 0000034E 02                  <1>     db AT_LABEL
+  1280 0000034F [0304]              <1>     dw pl_cpu
+  1281 00000351 2A02                <1>     dw POS(R_SYS, C_RLBL)
+  1282 00000353 02                  <1>     db AT_LABEL
+  1283 00000354 [0D04]              <1>     dw pl_fpu
+  1284 00000356 0203                <1>     dw POS(R_SYS+1, C_LBL)
+  1285 00000358 02                  <1>     db AT_LABEL
+  1286 00000359 [1904]              <1>     dw pl_clock
+  1287 0000035B 2A03                <1>     dw POS(R_SYS+1, C_RLBL)
+  1288 0000035D 02                  <1>     db AT_LABEL
+  1289 0000035E [1F04]              <1>     dw pl_cache
+  1290 00000360 0204                <1>     dw POS(R_SYS+2, C_LBL)
+  1291 00000362 02                  <1>     db AT_LABEL
+  1292 00000363 [7A04]              <1>     dw l_chip
+  1293 00000365 0F04                <1>     dw POS(R_SYS+2, C_VAL)
+  1294 00000367 03                  <1>     db AT_VALUE
+  1295 00000368 [6805]              <1>     dw s_chipset
+  1296 0000036A 2A04                <1>     dw POS(R_SYS+2, C_RLBL)
+  1297 0000036C 02                  <1>     db AT_LABEL
+  1298 0000036D [2504]              <1>     dw pl_shadow
+  1299 0000036F 0205                <1>     dw POS(R_SYS+3, C_LBL)
+  1300 00000371 02                  <1>     db AT_LABEL
+  1301 00000372 [3004]              <1>     dw pl_bios
+  1302 00000374 0F05                <1>     dw POS(R_SYS+3, C_VAL)
+  1303 00000376 03                  <1>     db AT_VALUE
+  1304 00000377 [6A04]              <1>     dw s_bioscore
+  1305 00000379 2A05                <1>     dw POS(R_SYS+3, C_RLBL)
+  1306 0000037B 02                  <1>     db AT_LABEL
+  1307 0000037C [3504]              <1>     dw pl_rtc
+  1308 0000037E 0207                <1>     dw POS(R_MEM, C_LBL)
+  1309 00000380 02                  <1>     db AT_LABEL
+  1310 00000381 [4104]              <1>     dw pl_mem
+  1311 00000383 020A                <1>     dw POS(R_FDD, C_LBL)
+  1312 00000385 02                  <1>     db AT_LABEL
+  1313 00000386 [E604]              <1>     dw l_fda
+  1314 00000388 2A0A                <1>     dw POS(R_FDD, C_RLBL)
+  1315 0000038A 02                  <1>     db AT_LABEL
+  1316 0000038B [F004]              <1>     dw l_fdb
+  1317 0000038D 020B                <1>     dw POS(R_HDC, C_LBL)
+  1318 0000038F 02                  <1>     db AT_LABEL
+  1319 00000390 [4804]              <1>     dw pl_diskc
+  1320 00000392 020D                <1>     dw POS(R_HDC+2, C_LBL)
+  1321 00000394 02                  <1>     db AT_LABEL
+  1322 00000395 [5004]              <1>     dw pl_diskd
+  1323 00000397 020F                <1>     dw POS(R_PORTS, C_LBL)
+  1324 00000399 02                  <1>     db AT_LABEL
+  1325 0000039A [5804]              <1>     dw pl_ports
+  1326 0000039C 0210                <1>     dw POS(R_ROMS, C_LBL)
+  1327 0000039E 02                  <1>     db AT_LABEL
+  1328 0000039F [5E04]              <1>     dw pl_roms
+  1329 000003A1 0000                <1>     dw 0
+  1330                              <1> 
+  1331 000003A3 434F4D31434F4D3243- <1> port_names: db "COM1COM2COM3COM4LPT1LPT2LPT3"
+  1331 000003AC 4F4D33434F4D344C50- <1>
+  1331 000003B5 54314C5054324C5054- <1>
+  1331 000003BE 33                  <1>
+  1332                              <1> 
+  1333 000003BF 425542696F7320322E- <1> ps_title:    db "BUBios 2.0  ", 0xFE, "  Power-On Self Test", 0
+  1333 000003C8 302020FE2020506F77- <1>
+  1333 000003D1 65722D4F6E2053656C- <1>
+  1333 000003DA 66205465737400      <1>
+  1334 000003E1 4269747320756E6420- <1> ps_title_r: db "Bits und Bolts  ", 0xFE, "  OPTi 82C495SLC", 0
+  1334 000003EA 426F6C74732020FE20- <1>
+  1334 000003F3 204F50546920383243- <1>
+  1334 000003FC 343935534C4300      <1>
+  1335 00000403 50726F636573736F72- <1> pl_cpu:      db "Processor", 0
+  1335 0000040C 00                  <1>
+  1336 0000040D 436F70726F63657373- <1> pl_fpu:      db "Coprocessor", 0
+  1336 00000416 6F7200              <1>
+  1337 00000419 436C6F636B00        <1> pl_clock:    db "Clock", 0
+  1338 0000041F 436163686500        <1> pl_cache:    db "Cache", 0
+  1339 00000425 536861646F77205241- <1> pl_shadow:   db "Shadow RAM", 0
+  1339 0000042E 4D00                <1>
+  1340 00000430 42494F5300          <1> pl_bios:     db "BIOS", 0
+  1341 00000435 525443206261747465- <1> pl_rtc:      db "RTC battery", 0
+  1341 0000043E 727900              <1>
+  1342 00000441 4D656D6F727900      <1> pl_mem:      db "Memory", 0
+  1343 00000448 4469736B20433A00    <1> pl_diskc:    db "Disk C:", 0
+  1344 00000450 4469736B20443A00    <1> pl_diskd:    db "Disk D:", 0
+  1345 00000458 506F72747300        <1> pl_ports:    db "Ports", 0
+  1346 0000045E 4F7074696F6E20524F- <1> pl_roms:     db "Option ROMs", 0
+  1346 00000467 4D7300              <1>
+  1347 0000046A 414D492031312F3131- <1> s_bioscore: db "AMI 11/11/92 ", 0xFE, " BUBios 2.0", 0
+  1347 00000473 2F393220FE20425542- <1>
+  1347 0000047C 696F7320322E3000    <1>
+  1348 00000484 437972697820343836- <1> s_cx486dlc: db "Cyrix 486DLC", 0
+  1348 0000048D 444C4300            <1>
+  1349 00000491 437972697820343836- <1> s_cyrix:    db "Cyrix 486", 0
+  1349 0000049A 00                  <1>
+  1350 0000049B 333837207072657365- <1> s_fpu387:   db "387 present", 0
+  1350 000004A4 6E7400              <1>
+  1351 000004A7 4F6E2D6368697000    <1> s_fpuint:   db "On-chip", 0
+  1352 000004AF 204B4200            <1> s_kb:       db " KB", 0
+  1353 000004B3 204D4200            <1> s_mb:       db " MB", 0
+  1354 000004B7 204D4220626C6F636B- <1> s_blocks:   db " MB blocks", 0
+  1354 000004C0 7300                <1>
+  1355 000004C2 547970652000        <1> s_type:     db "Type ", 0
+  1356 000004C8 201A20444F532000    <1> s_arrow:    db " ", 0x1A, " DOS ", 0
+  1357 000004D0 44697361626C656400  <1> s_disabled: db "Disabled", 0
+  1358 000004D9 566964656F00        <1> s_video:    db "Video", 0
+  1359 000004DF 53797374656D00      <1> s_system:   db "System", 0
+  1360 000004E6 202B2000            <1> s_plus:     db " + ", 0
+  1361 000004EA 4F4B00              <1> s_ok:       db "OK", 0
+  1362 000004ED 4C6F7700            <1> s_low:      db "Low", 0
+  1363 000004F1 286E6F204944454E54- <1> s_noid:     db "(no IDENTIFY data)", 0
+  1363 000004FA 494659206461746129- <1>
+  1363 00000503 00                  <1>
+  1364 00000504 54657374696E67206D- <1> s_st_mem:   db "Testing memory ...", 0
+  1364 0000050D 656D6F7279202E2E2E- <1>
+  1364 00000516 00                  <1>
+  1365 00000517 50726573732044454C- <1> s_st_del:   db "Press DEL to run Setup", 0
+  1365 00000520 20746F2072756E2053- <1>
+  1365 00000529 6574757000          <1>
+  1366 0000052E 436865636B696E6720- <1> s_st_dev:   db "Checking devices ...", 0
+  1366 00000537 64657669636573202E- <1>
+  1366 00000540 2E2E00              <1>
+  1367 00000543 504F535420666F756E- <1> s_st_err:   db "POST found a problem", 0
+  1367 0000054C 6420612070726F626C- <1>
+  1367 00000555 656D00              <1>
+  1368 00000558 426F6F74696E673A20- <1> s_st_bootc: db "Booting: C: then A:", 0
+  1368 00000561 433A207468656E2041- <1>
+  1368 0000056A 3A00                <1>
+  1369 0000056C 426F6F74696E673A20- <1> s_st_boota: db "Booting: A: then C:", 0
+  1369 00000575 413A207468656E2043- <1>
+  1369 0000057E 3A00                <1>
+  1370 00000580 B320504F53542000    <1> s_post:     db 0xB3, " POST ", 0
+  1371 00000588 28432920416D657269- <1> s_amicopy:  db "(C) American Megatrends Inc.,", 0
+  1371 00000591 63616E204D65676174- <1>
+  1371 0000059A 72656E647320496E63- <1>
+  1371 000005A3 2E2C00              <1>
+  1372 000005A6 425542696F7320322E- <1> s_bucopy:   db "BUBios 2.0 (C) 2026 Bits und Bolts", 0
+  1372 000005AF 302028432920323032- <1>
+  1372 000005B8 36204269747320756E- <1>
+  1372 000005C1 6420426F6C747300    <1>
+  1373 000005C9 207300              <1> s_sec:      db " s", 0
+  1374                              <1> 
+  1375                              <1> post3_end:
