@@ -6,29 +6,35 @@ ORG 0x76F5          ; free-space block inside the ROM image (segment F000 implie
 ;  CHS TRANSLATION PATCH for Soyo 386 AMI BIOS (27C512, dated 11/11/92)
 ;
 ;  Adds bit-shift ("Large"/ECHS-style) CHS translation to the legacy
-;  hard-disk INT13h handler so drives up to the ~7.88 GB INT13 CHS
-;  ceiling can be addressed, instead of the native 504 MB CHS wall
-;  (1024 cyl x 16 heads x 63 sect, imposed by raw CHS pass-through
-;  to the IDE task-file registers with no translation logic).
+;  hard-disk INT13h handler so drives up to the INT13 CHS ceiling of
+;  1024 x 255 x 63 x 512 = 8.42 GB (7.84 GiB) can be addressed, instead
+;  of the native 504 MB CHS wall (1024 cyl x 16 heads x 63 sect, imposed
+;  by raw CHS pass-through to the IDE task-file registers with no
+;  translation logic).
 ;
-;  Two call sites in the original ROM are patched to reach this code
-;  (see build.py for the exact byte patches applied at 0xA659 and
-;  0xA965); nothing else in the ROM is modified.
+;  The routines below are reached from five patch sites in the original
+;  ROM (all applied by py/build.py, which also asserts the original
+;  bytes at each site before overwriting them):
+;    0xA659-0xA685  AH=08h reporting body -> CALL xlate_getparams / JMP 0xA686
+;    0xA965         AND DH,0Fh            -> CALL xlate_headcyl
+;    0xA60E, 0xA7EA, 0xAB3D  cylinder-high builders before OUT 1F5h
+;                   -> MOV AL,[BP+6] + NOP fill (the byte xlate_headcyl stores)
+;  plus a checksum-balancing word at 0x7900.
 ; =====================================================================
 
 ; ---------------------------------------------------------------
-; calc_factor                                            -- v5
+; calc_factor
 ;   In:  AX = RealCyl (word), CL = RealHeads (byte, CH=0)
 ;   Out: AX = TranslatedHeads  (RealHeads * 2^n, or 255)
 ;   Preserves: BX, CX, DX, SI, DI, ES, DS
 ;
-;   v5 change: the head count is never allowed to reach 256.
+;   The head count is never allowed to reach 256 (BIOS_Evaluation.md bug #6).
 ;   256 heads (DH=255 reported as "max head index") is fatal for
 ;   MS-DOS/Win9x: FDISK reports the right size but fails to write the
 ;   partition table, and some geometries hang the machine. The classic
 ;   BIOS answer is used instead: head counts go 16,32,64,128 and then
-;   jump straight to 255 (Phoenix/AMI "Large"/ECHS table), which also
-;   lifts the ceiling to 1024 x 255 x 63 x 512 = 7.88 GB.
+;   jump straight to 255 (Phoenix/AMI "Large"/ECHS table), giving a
+;   ceiling of 1024 x 255 x 63 x 512 = 8.42 GB (7.84 GiB).
 ; ---------------------------------------------------------------
 calc_factor:
     push bx
@@ -57,7 +63,7 @@ calc_factor:
 ;        CL = (max-cyl hi bits << 6) | sectors/track
 ;        DH = translated max-head index (TranslatedHeads - 1)
 ;        AL = sectors/track   (what the original code left in AL)
-;   DL/AH are set by the original tail at 0xA686, which v4+ preserves.
+;   DL/AH are set by the original tail at 0xA686, which is left intact.
 ;   All 32-bit registers are untouched (16-bit math only).
 ; ---------------------------------------------------------------
 xlate_getparams:
@@ -106,7 +112,7 @@ xlate_getparams:
     ret
 
 ; ---------------------------------------------------------------
-; xlate_headcyl  (replaces "AND DH,0Fh" at 0xA965)   -- v4
+; xlate_headcyl  (replaces "AND DH,0Fh" at 0xA965)
 ;
 ;   Entry context (exactly as at the original instruction):
 ;     DH    = original caller HEAD (logical)
@@ -121,8 +127,8 @@ xlate_getparams:
 ;     outer [bp+6] = physical cylinder HIGH BYTE (IDE port 1F5h value);
 ;                    the three port-write sites now read it from there.
 ;     The caller's saved DX in the INT13h frame ([bp+14h/15h]) is NOT
-;     touched any more (v3 wrote [bp+15h] = caller's DH, so every
-;     translated call returned a corrupted DH to the caller).
+;     touched: [bp+15h] is the caller's saved DH, and writing it was
+;     bug #4 in BIOS_Evaluation.md.
 ;     All 32-bit registers preserved (PUSHAD/POPAD).
 ;
 ;   Only the functions that actually carry a CHS address are translated:
@@ -179,7 +185,7 @@ xlate_headcyl:
     xor  dh, dh
     mov  [bp-10], dx
     mov  ax, si
-    call calc_factor              ; ax = TranslatedHeads, si = factor
+    call calc_factor              ; ax = TranslatedHeads
     mov  [bp-12], ax
 
     mov  ax, [bp+4]               ; origCX

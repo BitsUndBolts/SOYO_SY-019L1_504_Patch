@@ -1,0 +1,7 @@
+# Normalise line endings in the repository; check out with the platform default.
+* text=auto
+
+# ROM images, listings and pictures are binary and must never be converted.
+*.BIN binary
+*.bin binary
+*.png binary

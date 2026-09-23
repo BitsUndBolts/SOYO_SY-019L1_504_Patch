@@ -2,7 +2,7 @@
 
 **What this documents:** the complete method used to lift a 1992 AMI 386
 BIOS (SOYO SY-019L1, OPTi 82C495SLC, 64 KB ROM) from a 504 MB hard-disk
-ceiling to the full ~7.88 GB INT 13h CHS ceiling, with no LBA support and
+ceiling to the INT 13h CHS ceiling of 7.84 GiB (8.42 GB), with no LBA support and
 no extra ROM space. Verified on real hardware: an 8 GB CF card
 (16000/16/63) partitioned, formatted, booted from, and benchmarked.
 
@@ -22,7 +22,7 @@ field widths:
 
 | Interface | Cylinders | Heads | Sectors | Max capacity |
 |---|---|---|---|---|
-| INT 13h (software side) | 1024 (10 bits: CH + CL bits 7:6) | 256 (DH) | 63 (CL bits 5:0) | **7.88 GB** |
+| INT 13h (software side) | 1024 (10 bits: CH + CL bits 7:6) | 256 (DH) | 63 (CL bits 5:0) | **7.88 GiB** (8.46 GB) |
 | ATA/IDE task file (hardware side) | 65536 (1F4h + 1F5h) | 16 (4 bits in 1F6h) | 255 (1F3h) | 136 GB |
 
 An unpatched legacy BIOS passes the INT 13h values **straight through** to
@@ -79,7 +79,7 @@ not a power of two, compute the logical cylinder count as
 `cyls_phys * heads_phys / heads_logical` (a 16x16->32 `MUL` followed by a
 32/16 `DIV` — the quotient always fits, so no 32-bit registers are needed).
 
-Ceiling with this rule: 1024 x 255 x 63 x 512 = **7.88 GB**. Going beyond
+Ceiling with this rule: 1024 x 255 x 63 x 512 = **7.84 GiB** (8.42 GB). Going beyond
 that requires INT 13h extensions (AH=41h/42h), i.e. a different project.
 
 Keep whatever "-1" / "-2" convention the original AH=08h code used when
@@ -407,7 +407,7 @@ drive rarely does.
 
 ## 11. Limits of this approach
 
-- Ceiling is 1024 x 255 x 63 x 512 = **7.88 GB**. Beyond that needs INT
+- Ceiling is 1024 x 255 x 63 x 512 = **7.84 GiB** (8.42 GB). Beyond that needs INT
   13h extensions (AH=41h/42h) and an OS that uses them.
 - FAT16 caps a partition at 2 GB; use multiple partitions, or a DOS with
   FAT32 (MS-DOS 7.1 / Win9x) as we did for the 8 GB card.
@@ -442,11 +442,13 @@ AMI BIOS 11/11/92, OPTi 82C495SLC, 64 KB at F000. Original MD5
 | Free space used | `0x76F5` (+ checksum filler word at `0x7900`) |
 | POST/boot stack | `SS:SP = 0030:0100` (linear 0x300-0x400) |
 
-Final result: v5 ROM, 8 GB CF (16000/16/63) -> 1002 cyl / 255 heads / 63
+Final result (v5, the version in this repository): 8 GB CF (16000/16/63) -> 1002 cyl / 255 heads / 63
 sectors, 7.67 GB usable, FDISK + FORMAT + boot from C: all working.
 
-**Files in this project:** `xlate_v5.asm` (the three routines),
-`build_v5.py` (splice + patch + checksum), `ide_harness2.py` (emulator),
-`regress_v5.py` and `boot_test.py` (the tests in §8),
+**Files in this project:** `asm/xlate.asm` (the three routines),
+`py/build.py` (assemble + splice + patch + checksum), `py/ide_harness.py`
+(emulator), `py/regress.py` and `py/boot_test.py` (the tests in §8),
+`py/verify_model.py` (the translation math in plain Python),
+`HOW_THE_PATCH_WORKS.md` (walk-through of every changed byte),
 `BIOS_ADDRESS_MAP.md` (the map from §4), `BIOS_Evaluation.md` (the full
 bug history with the diagnosis of each).

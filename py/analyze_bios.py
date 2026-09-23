@@ -1,24 +1,35 @@
 #!/usr/bin/env python3
 """
 SOYO SY-019L1 (AMI 386/486) BIOS analysis helper.
- 
-Regenerates the findings in BIOS_ADDRESS_MAP.md directly from BIOS_HEX.txt,
-so they can be re-verified (or re-run against a different AMI ROM of the
-same generation) without re-doing the manual reverse-engineering.
- 
+
+Regenerates the ROM-structure findings in BIOS_ADDRESS_MAP.md directly from
+a ROM image, so they can be re-verified (or re-run against a different AMI
+ROM of the same generation) without re-doing the manual reverse-engineering.
+
 Usage:
-    python3 analyze_bios.py BIOS_HEX.txt
+    python3 py/analyze_bios.py [rom]      (default: the original ROM image)
+
+The argument may be a raw 64 KB binary or a whitespace-separated hex dump.
+Run it on binary/SY019L1_27C512_CHSPATCH.BIN to see the checksum still pass
+and the former free space at 0x76F5 now occupied by the patch.
 """
+import os
 import sys
 import struct
 import re
- 
- 
-def load_hex(path):
-    data = open(path).read().split()
-    return bytes(int(x, 16) for x in data)
- 
- 
+
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DEFAULT_ROM = os.path.join(ROOT, 'binary', 'SY019L1_27C512_ORIGINAL.BIN')
+
+
+def load_rom(path):
+    raw = open(path, 'rb').read()
+    if len(raw) == 0x10000:
+        return raw                                   # raw binary image
+    return bytes(int(x, 16) for x in raw.decode().split())   # hex dump
+
+
 def check_reset_vector(b):
     print("== Reset vector (0xFFF0) ==")
     rv = b[0xFFF0:0x10000]
@@ -29,8 +40,8 @@ def check_reset_vector(b):
     print(f"  release date string: {date!r}")
     print(f"  model ID byte @0xFFFE: 0x{b[0xFFFE]:02X}")
     print()
- 
- 
+
+
 def verify_checksum(b):
     print("== ROM checksum (verified against code at 0xD759-0xD779) ==")
     words = struct.unpack('<32768H', b)
@@ -42,8 +53,8 @@ def verify_checksum(b):
     print("    loop: cs lodsw ; add bx,ax ; loop")
     print("    jz ok  (BX must be 0 after summing all 32768 words)")
     print()
- 
- 
+
+
 def dump_disk_type_table(b, start=0xE401, n=46):
     print(f"== Fixed Disk Parameter Table (types 1-{n}) @ 0x{start:04X} ==")
     print("  record = 16 bytes: cyl(u16) heads(u16) pad(u8)=0 precomp(u16) "
@@ -63,19 +74,20 @@ def dump_disk_type_table(b, start=0xE401, n=46):
     print(f"  type 47 (user-definable) placeholder @ 0x{end:04X}: "
           f"{b[end:end+16].hex(' ')}  (all-zero in ROM; filled by Setup at runtime)")
     print()
- 
- 
+
+
 def find_int13_call_sites(b):
     print("== INT 13h call sites (CD 13 bytes found in ROM) ==")
     print("  NOTE: these are the BIOS calling *itself* (e.g. boot loader, drive")
-    print("  auto-detect). The handler's real entry point is only wired up at")
-    print("  runtime via the IVT (int 0x13 -> 0000:004C) and is not yet located.")
+    print("  auto-detect). The hard-disk INT 13h handler itself is entered at")
+    print("  F000:A3E7 (installed in the IVT at 0000:004C during POST); its")
+    print("  AH-dispatch table is at F000:A44B (see BIOS_ADDRESS_MAP.md).")
     offs = [m.start() for m in re.finditer(b'\xcd\x13', b)]
     for o in offs:
         print(f"    0x{o:04X}")
     print()
- 
- 
+
+
 def find_padding(b, minlen=48):
     print(f"== Candidate free/padding space (runs of 0x00, >= {minlen} bytes) ==")
     i, n = 0, len(b)
@@ -90,18 +102,18 @@ def find_padding(b, minlen=48):
         else:
             i += 1
     print()
- 
- 
+
+
 def main():
-    path = sys.argv[1] if len(sys.argv) > 1 else 'BIOS_HEX.txt'
-    b = load_hex(path)
+    path = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_ROM
+    b = load_rom(path)
     print(f"Loaded {len(b)} (0x{len(b):X}) bytes from {path}\n")
     check_reset_vector(b)
     verify_checksum(b)
     dump_disk_type_table(b)
     find_int13_call_sites(b)
     find_padding(b)
- 
- 
+
+
 if __name__ == '__main__':
     main()

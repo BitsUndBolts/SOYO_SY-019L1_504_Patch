@@ -4,11 +4,24 @@ Soyo 386 AMI BIOS — Hard Disk Size Limit: Findings & Patch Design
 **ROM:** 64 KB, AMI BIOS dated **11/11/92**. **Mapped at:** segment `F000`.
 **Original MD5:** `e80a824d8f3c39d40b98a4be5d8d9cff`.
 
-**Status: the floppy-boot-freeze bug is fixed and confirmed on real
-hardware. A second, unresolved problem now blocks progress: translated
-drives mostly fail to be recognized by DOS/FDISK, with exactly one
-confirmed-working exception. This is the priority for the next session —
-see §5.**
+**Status: complete — v5 is confirmed working on real hardware (§8).**
+
+> **About this document.** This is the development log, written as the
+> work happened (v1 → v5). Sections 3–7 describe bugs in intermediate
+> versions and the reasoning at the time, including hypotheses that were
+> later ruled out; the "open problem" in §5 was solved in §6. Only the
+> final version (v5) is included in this repository — earlier ROMs,
+> sources and scripts were omitted for clarity. Script names in the log
+> refer to the development-time files; their final equivalents are:
+>
+> | In this log | In the repository |
+> |---|---|
+> | `xlate.asm`, `xlate_v4.asm`, `xlate_v5.asm` | `asm/xlate.asm` (v5) |
+> | `build_v4.py`, `build_v5.py` | `py/build.py` (v5) |
+> | `ide_harness.py` (first generation), `ide_harness2.py` | `py/ide_harness.py` |
+> | `regress_v4.py`, `regress_v5.py` | `py/regress.py` |
+> | `boot_test.py`, `verify_model.py` | `py/boot_test.py`, `py/verify_model.py` |
+> | `SY019L1_27C512_CHSPATCH_v5.BIN` | `binary/SY019L1_27C512_CHSPATCH.BIN` |
 
 ---
 
@@ -241,7 +254,7 @@ geometries hang before DOS even loads (16000/16/63).
 power-of-two case, so **the geometry of every already-formatted drive is
 unchanged** (997/16, 992/32, 967/64, 986/128, 556/240 all identical to
 v4 — existing partitions stay valid). New ceiling: 1024 x 255 x 63 x 512
-= 7.88 GB, the project goal.
+= 7.84 GiB (8.42 GB), the project goal.
 - 15506/16/63 -> 971 cyl / 255 heads / 63 sect (7.44 GiB)
 - 16000/16/63 -> 1002 cyl / 255 heads / 63 sect (7.68 GiB)
 - 16383/16/63 -> 1024 cyl / 255 heads / 63 sect (7.84 GiB, clamped)

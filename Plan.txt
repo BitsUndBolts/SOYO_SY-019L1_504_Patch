@@ -1,4 +1,7 @@
 SOYO SY-019L1 BIOS — Plan / Status
+(The repository contains only the final version, v5. The bug list below
+keeps the version numbers of the development history; see
+Project_Overview.md.)
 (v5 confirmed working on real hardware: 8 GB CF partitioned, formatted,
 booted from, and benchmarked)
 
@@ -32,9 +35,10 @@ OPEN / OPTIONAL:
 [ ] Boot-sector write protection at 0xAB62 (original ROM feature, CMOS
     option) still untouched -- only matters if partitioning ever fails
     with an on-screen "Format !!!" / "BootSector Write !!!" warning.
-[ ] If a drive ever needs more than 7.88 GB, that requires INT 13h
+[ ] If a drive ever needs more than 7.84 GiB (8.42 GB), that requires INT 13h
     extensions (AH=41h/42h), i.e. a separate project.
 
 NOTE: do not change how the logical geometry is computed without checking
 that every already-working geometry maps to exactly the same numbers --
-otherwise existing partitions become unreadable.
+otherwise existing partitions become unreadable. py/regress.py and
+py/verify_model.py pin those numbers and fail if they change.

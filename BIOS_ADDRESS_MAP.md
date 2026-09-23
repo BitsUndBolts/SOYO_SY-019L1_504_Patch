@@ -1,13 +1,14 @@
 # SOYO SY-019L1 BIOS — Address Map / Reference
 
-**Source:** `BIOS_HEX.txt`, 65,536 bytes (0x10000). **MD5 of raw binary:**
-`e80a824d8f3c39d40b98a4be5d8d9cff`.
+**Source:** `binary/SY019L1_27C512_ORIGINAL.BIN`, 65,536 bytes (0x10000).
+**MD5:** `e80a824d8f3c39d40b98a4be5d8d9cff`.
 **See also:** `Project_Overview.md` (status/context), `BIOS_Evaluation.md`
-(patch design, bug history, current open problem).
+(patch design and bug history), `HOW_THE_PATCH_WORKS.md` (every changed
+byte explained).
 **Addressing:** file offset == segment offset in `F000`.
 
 **[verified]** = confirmed by disassembly and/or execution (including via
-the `ide_harness.py` emulator). **[located]** = found by string/pattern
+the `py/ide_harness.py` emulator). **[located]** = found by string/pattern
 search. **[open]** = unresolved.
 
 ---
@@ -18,16 +19,16 @@ search. **[open]** = unresolved.
 |---|---|---|---|
 | `0000-00A6`ish | ~166 B | BIOS ID/signature block #1 | [located] |
 | `3082` | — | `"AMIBIOS SETUP PROGRAM"` | [located] |
-| `76F5-7F00` | 2,059 B | Free space — translation patch lives here (294 bytes used) | [verified — in use] |
+| `76F5-7F00` | 2,059 B | Free space — translation patch lives here (`76F5-7855`, 353 bytes) plus the checksum word at `7900` | [verified — in use] |
 | `8000` | — | BIOS ID/signature block #2 | [located] |
 | `8078/8097` | — | Chipset/board ID: `"40-040A-001102-00101111-111192-OP495SLC"` | [located] |
 | **`A44B-A484`** | **52 B** | **INT13h `AH=` dispatch table, 26 entries (AH=00h-19h)** | **[verified]** — see §4 |
 | **`A47F`** | — | String `"Format !!!"` — boot-sector-protection warning text | **[verified]** — see §6 |
 | **`A4A2`** | — | String `"BootSector Write !!!"` — boot-sector-protection warning text | **[verified]** — see §6 |
 | `A4FE` | — | Real `AH=08h` (Get Drive Parameters) entry point | [verified] |
-| `A659-A690` | 56 B | `AH=08h` clamp body. **`A659-A68F` (55 bytes) is the patched region — patched.** `A690` (`RET`, `0xC3`) is the very next byte and is **not** part of the patch; it's the original handler's own return | **[verified — corrected this session]** |
-| `A691` | — | `AH=09h` (Initialize Drive Parameters) — a **separate routine**, reached only via its own dispatch-table entry, **not** a fall-through from `AH=08h`. (Earlier notes in this project incorrectly described this as fall-through; that was the root of the off-by-one patch bug — see `BIOS_Evaluation.md` §4.) | **[verified — corrected this session]** |
-| `A60F-A622`, `A7EB-A7FA`, `AB3E-AB4D` | — | Cylinder-high-byte port-write sites — patched | [verified] |
+| `A659-A690` | 56 B | `AH=08h` clamp body. **Only `A659-A685` (45 bytes) is patched.** `A686-A690` is the original handler tail (`mov dl,[0x75]` / `mov ah,0` / `mov [0x74],ah` / `RET`) and is **not** part of the patch (overwriting it was bugs #2 and #3) | **[verified]** |
+| `A691` | — | `AH=09h` (Initialize Drive Parameters) — a **separate routine**, reached only via its own dispatch-table entry, **not** a fall-through from `AH=08h`. (Earlier notes in this project incorrectly described this as fall-through; that was the root of the off-by-one patch bug — see `BIOS_Evaluation.md` §4.) | **[verified]** |
+| `A60E-A621`, `A7EA-A7F9`, `AB3D-AB4C` | — | Cylinder-high-byte builders before `OUT 1F5h` — patched | [verified] |
 | `A7CE` | — | Seek handler | [verified] |
 | `A965-A968` | 3 B | Shared head-byte builder — patched to call `xlate_headcyl` | [verified] |
 | `AB14` | — | Shared "write CHS to IDE ports" routine | [verified] |
@@ -69,7 +70,7 @@ Base `CS:0xA44B`, `DI = AH*2`, `CALL [CS:DI+0xA44B]` at `0xA417`, valid for
 | 03 | Write Sectors | `A580` | translated; **first calls the boot-sector-protection check at `0xAB62`** |
 | 04 | Verify Sectors | `A598` | translated |
 | 05 | Format Track | `A5B9` | translated |
-| 08 | **Get Drive Parameters** | `A4FE` → body at `A659`, returns via `RET` at `A690` | **patched** (`A659`-`A68F` only — `A690` is untouched) |
+| 08 | **Get Drive Parameters** | `A4FE` → body at `A659`, returns via `RET` at `A690` | **patched** (`A659`-`A685` only — tail `A686`-`A690` is untouched) |
 | 09 | Initialize Drive Params | `A691` | separate routine, own dispatch entry, **not** reached via fall-through from AH=08h |
 | 0C | Seek | `A7CE` | translated |
 
@@ -78,7 +79,7 @@ for the unlisted entries — nothing about them has changed.)
 
 ---
 
-## 5. Patch sites as of v5 (current ROM)
+## 5. Patch sites (final ROM, `binary/SY019L1_27C512_CHSPATCH.BIN`)
 
 | Site | Range | Replacement |
 |---|---|---|
@@ -93,7 +94,7 @@ for the unlisted entries — nothing about them has changed.)
 `[bp+6]` is the frame scratch byte the original code used for the 1F5h
 (cylinder-high) value; `xlate_headcyl` now writes the full physical
 cylinder high byte there. **`[bp+15h]` is the caller's saved DH and is
-never written** (v3 did, and corrupted DX for every caller).
+never written** (an earlier version did, and corrupted DX for every caller — bug #4).
 
 ## 6. INT 13h stack frame (built at `A401-A405`)
 
@@ -117,13 +118,9 @@ never written** (v3 did, and corrupted DX for every caller).
 | `F7AD` | INT 18h: "DISKETTE BOOT FAILURE" / "INVALID BOOT DISKETTE" / "DRIVE NOT READY"; an INT 18h from MBR code instead lands on "NO ROM BASIC" + halt |
 | `0000:0300` | type-47 FDPT RAM area (CMOS option); BIOS POST/boot stack is `SS:SP=0030:0100` = linear 0x300-0x400, directly above it |
 
-## 8. Suggested next steps
+## 8. Tools
 
-See `BIOS_Evaluation.md` §5 for the current open problem (most translated
-drives fail DOS/FDISK recognition despite mathematically correct
-`AH=08h` output) and the ranked list of leads to investigate next.
-
-`analyze_bios.py` reproduces the ROM-structural `[verified]` facts above.
-`ide_harness.py` (in the project) can execute real INT13h calls against
-either ROM through the actual dispatcher and is the right tool for
-testing the leads in `BIOS_Evaluation.md` §5.
+`py/analyze_bios.py` reproduces the ROM-structural `[verified]` facts above.
+`py/ide_harness.py` executes real INT 13h calls against either ROM through
+the actual dispatcher; `py/regress.py` and `py/boot_test.py` build on it.
+Open items are listed in `Plan.txt`.
