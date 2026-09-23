@@ -1,0 +1,40 @@
+SOYO SY-019L1 BIOS — Plan / Status
+(v5 confirmed working on real hardware: 8 GB CF partitioned, formatted,
+booted from, and benchmarked)
+
+DONE — confirmed on real hardware:
+[x] Bug #1: xlate_getparams DX-clobber across calc_factor (always
+    reported 1023 cylinders)
+[x] Bug #2: patch region overwrote the AH=08h handler's own RET, so every
+    GetParams call fell through into AH=09h (floppy-boot freeze whenever
+    a hard disk was configured)
+[x] Bug #3: patch region also overwrote the handler tail that loads
+    DL = drive count, so DOS/FDISK saw "no fixed disk" on every drive
+    whose (RealCyl mod factor) happened to be zero
+[x] Bug #4: translation wrote the physical cylinder high byte into
+    [bp+15h] = the caller's saved DH, corrupting DX on every call
+[x] Bug #5: PUSHA/POPA around 32-bit math zeroed the upper halves of
+    EAX/ECX/EDX (now PUSHAD/POPAD)
+[x] Bug #6: head count could reach 256 (FDISK "Error writing fixed disk"
+    on 8 GB cards, hangs on some geometries) -- ladder now ends at 255
+[x] v5 on hardware: 8 GB CF 16000/16/63 -> 1002/255/63, FDISK + FORMAT /S
+    + file copy + benchmark + BOOT FROM C: all working; WD 24300 and 2 GB
+    SanDisk unchanged and still good
+[x] CHS_TRANSLATION_PORTING_GUIDE.md written for reuse on other BIOSes
+
+OPEN / OPTIONAL:
+[ ] Continue soak testing v5 (more cards, ScanDisk surface scan, long
+    file-copy runs, second drive on the same channel as D:).
+[ ] Some CF cards / CF-to-IDE adapters still fail. Emulation says the ROM
+    is correct for those geometries, so treat as hardware compatibility:
+    swap adapter, try another card, compare with the original ROM on a
+    <504 MB partition before suspecting the patch.
+[ ] Boot-sector write protection at 0xAB62 (original ROM feature, CMOS
+    option) still untouched -- only matters if partitioning ever fails
+    with an on-screen "Format !!!" / "BootSector Write !!!" warning.
+[ ] If a drive ever needs more than 7.88 GB, that requires INT 13h
+    extensions (AH=41h/42h), i.e. a separate project.
+
+NOTE: do not change how the logical geometry is computed without checking
+that every already-working geometry maps to exactly the same numbers --
+otherwise existing partitions become unreadable.

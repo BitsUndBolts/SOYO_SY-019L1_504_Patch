@@ -1,0 +1,51 @@
+CHS_TRANSLATION_PORTING_GUIDE.md - the method, written to be reused on a
+different legacy BIOS: why the 504 MB limit exists, how to find the
+relevant code in an unknown ROM, what to write, how to verify it, and the
+full list of pitfalls (each one a bug that actually shipped here).
+
+Project_Overview.md - status, drive results, what the patch does.
+BIOS_Evaluation.md - root-cause analysis and the complete bug history
+  (sections 3-7: one section per bug, with how it was diagnosed).
+BIOS_ADDRESS_MAP.md - verified address map of this ROM.
+Plan.txt - what is done and what is still open.
+
+xlate_v5.asm - NASM source of the three translation routines
+  (calc_factor, xlate_getparams, xlate_headcyl) spliced in at 0x76F5.
+  CURRENT VERSION. v5 caps translated heads at 255 (16/32/64/128/255),
+  computes logical cylinders as RealCyl*RealHeads/TransHeads in 16-bit
+  math, preserves all 32-bit registers, never touches the caller's saved
+  registers in the INT 13h frame, and only translates the functions that
+  actually carry a CHS address.
+build_v5.py - CURRENT build script: assembles xlate_v5.asm, asserts the
+  original bytes at every patch site, splices the code in, patches the
+  five sites, fixes the ROM checksum. Reads routine entry offsets from
+  the nasm listing (xlate_v5.lst) instead of hard-coded constants.
+SY019L1_27C512_CHSPATCH_v5.BIN - CURRENT ROM, confirmed on hardware.
+  MD5 8e520e91100f932d3f054883b08d37da.
+
+ide_harness2.py - Unicorn-based 16-bit real-mode harness. Loads either
+  ROM, sets up a simulated IDE drive (optionally backed by sector data),
+  BDA, IVT and CMOS, dispatches software interrupts, and runs real INT
+  13h calls through the genuine dispatcher. Logs every task-file write
+  with the resulting LBA, tracks the stack low-water mark, and can run
+  the ROM's own INT 19h boot path. Known limitation: no PIC/interrupt
+  modelling, so IRQ-driven waits run their slow worst-case path -- always
+  compare against the original ROM under identical inputs rather than
+  judging the patched ROM alone.
+regress_v5.py - per-geometry regression: AH=08h geometry/DL/AL plus 44
+  reads per geometry checked against the expected LBA (v4 vs v5).
+boot_test.py - runs the ROM's INT 19h boot path against a simulated drive
+  with an AA55 signature; shows whether the BIOS accepts the MBR.
+verify_model.py - plain-Python re-implementation of the translation math.
+analyze_bios.py - reproduces the verified ROM-structure facts.
+
+BIOS_HEX.txt - the original ROM as a hex dump (build scripts rebuild
+  orig.bin from it automatically).
+BIOS_GHIDRA.txt - Ghidra disassembly of the original ROM (large).
+
+OLDER, KEPT FOR REFERENCE: xlate.asm/build.py (v3, buggy),
+xlate_v4.asm/build_v4.py + v4 BIN (fixed bugs #3-#5 but could still reach
+256 heads), v3 BIN, ide_harness.py (first-generation harness).
+
+orig.bin - the raw 64 KB original ROM dump (regenerated from
+BIOS_HEX.txt by build_v5.py; MD5 e80a824d8f3c39d40b98a4be5d8d9cff).
