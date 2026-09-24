@@ -2,12 +2,12 @@
 
 BUBios 2.x adds a new **POST screen** to the BUBios setup and removes dead AMI code from the ROM to make room for it. Version 2.1 is based on the test of 2.0 on the real board. It adds a boot countdown with DEL for setup, automatic hard disk detection and LBA access through the INT 13h extensions. Everything from BUBios 1.0 (the MR-BIOS-style setup) and from the parent project (ECHS large-disk support up to 8.4 GB) is still there and unchanged.
 
-**Status:** version 2.1, third build. The second build ran on the real board with a 20 GB master (auto-detect, LBA) and a 4 GB slave (ECHS), and Windows 95 B installed. The third build fixes the setup-visit bugs found there. It is verified in the emulators, but has not yet run on the real board. This BIOS generation has no recovery block, so keep the 2.0 chip, the 1.0 chip or the original dump before programming an EPROM.
+**Status:** version 2.1, fifth build. Earlier builds ran on the real board with 64 MB, a 20 GB master and an 80 GB disk (auto-detect, LBA), a 16 GB CF card and a 4 GB slave (ECHS), and Windows 95 B installed. The fifth build fixes the occasional hang at the video sign-on after power-on or RESET. It is verified in the emulators, but has not yet run on the real board. This BIOS generation has no recovery block, so keep the 2.0 chip, the 1.0 chip or the original dump before programming an EPROM.
 
 | | |
 |---|---|
 | ROM image | `binary/BUBIOS2_SY019L1.BIN` (64 KB, 27C512) |
-| MD5 | `7cb6cd433fc576ce2dc9781210522f6c` |
+| MD5 | `d240bc3299046163126bc1d5834b2e16` |
 | Built from | `binary/base/SY019L1_27C512_CHSPATCH.BIN` (ECHS v5, MD5 `8e520e91100f932d3f054883b08d37da`) |
 | Setup | BUBios 1.0 setup, version 2.1, one new Tools entry |
 
@@ -25,7 +25,7 @@ The 2.0 test on the board brought up these points. This is what 2.1 does about e
 | Fill in the fields early, and pause before the boot | Everything that can be known before the memory test is shown with the first screen: floppies, disk names and geometry, serial and parallel ports, option ROMs, shadow RAM, battery, and the clock when the early reading is valid. What cannot be known yet (the cache, which AMI sets up last) shows `...` until it is. After POST, a 3-second countdown runs before the boot (see below). |
 | Remove the BUBios text at the bottom right | Removed. The BIOS ID string is on the right of the status bar, ending one column from the edge like the title bar. |
 | Why does POST crash without "(C) American Megatrends Inc.," on screen? | This is AMI's copyright check, not an error check. It is now switched off, and the line is gone (see below). |
-| HDD auto-detect and/or LBA, if there is room | Both are in (see below). About 110 bytes are left in the ROM. |
+| HDD auto-detect and/or LBA, if there is room | Both are in (see below). About 80 bytes are left in the ROM. |
 
 ### The boot countdown
 
@@ -81,6 +81,11 @@ INT 13h functions 41h, 42h, 43h, 44h, 47h and 48h are added for hard disks, in t
 
 A request that lies completely inside the drive's CHS geometry is sent in CHS form, so drives without LBA work too. A request beyond that uses LBA addressing.
 
+The `LBA nnnn MB` note on the POST screen appears only when a drive has more sectors through LBA than through its CHS geometry. Most drives above 8.4 GB report 16383/16/63, so the rest is LBA-only, as with the 80 GB Samsung (`LBA 76293 MB`). Some CF cards report their full size as CHS instead: the 16 GB card reports 31045/16/63, which is legal in ATA, where cylinders go up to 65535. For such a card, CHS and LBA sizes are the same and there is no LBA note. The whole card is still reached the same way:
+- DOS 7.1 asks for sectors by LBA number through the INT 13h extensions.
+- BUBios passes them to the card as CHS addresses, because they lie inside its CHS geometry.
+- The old INT 13h CHS interface (1024/255/63, 8 GB) is only used for the boot and for FAT partitions of the pre-LBA types.
+
 **What does not change:**
 
 - The classic CHS functions (02h, 03h, 08h …) and the ECHS translation are untouched. DOS sees the same 1002/255/63 geometry as before, and existing partitions and installations are not affected.
@@ -111,11 +116,11 @@ If a drive reports more sectors through LBA than its CHS geometry reaches (anyth
 |---|---|---|
 | Title bar | BUBios 2.1, Power-On Self Test | at once |
 | Processor | 80386 / 80486 / CPUID family; Cyrix 486DLC-class cores are named as such | at once |
-| Coprocessor | 387 present / On-chip / None (FNINIT probe) | at once |
+| Coprocessor | 387 present / On-chip / None (FNINIT probe) | end of POST, when interrupts and AMI's IRQ 13 handler are set up; `...` until then |
 | Clock | measured CPU clock (PIT-timed DIV loop, as on the setup's Summary page, but with 32 DIVs per pass so that slow uncached code fetches early in POST hardly matter) | at once if the reading is within 1/16 of a standard clock; otherwise tried again after the memory test and at the end of POST. `...` until then |
 | Cache | external cache size as the OPTi chipset reports it, or Disabled | end of POST (AMI sizes and enables the cache last); `...` until then |
 | Shadow RAM, RTC battery | from CMOS | at once |
-| Memory | progress bar and count in KB, updated for every 64 KB block AMI tests | live |
+| Memory | progress bar and count in KB, updated for every 64 KB block AMI tests. Below 1 MB only the count runs; the bar starts when AMI reports the total above 1 MB (the size in CMOS may still be from before a RAM upgrade) | live |
 | Floppy A:/B: | drive types from CMOS | at once |
 | Disk C:/D: | model name read from the drive (IDENTIFY), LBA size if larger than CHS, drive type (or Auto), physical geometry, the geometry DOS sees through ECHS, size in MB | at once; a drive that is still spinning up shows `...` and is identified after the memory test |
 | Ports | COM1-4 and LPT1-3 with their I/O addresses | at once: BUBios probes the ports the same way AMI does at checkpoint 9Ah (UART IIR at 3F8/2F8/3E8/2E8, printer data latch at 3BC/378/278). AMI repeats it later and the list is redrawn from its result. `None` only at the end |
@@ -155,7 +160,7 @@ The dead code was found in three steps:
 
 The build script checks the MD5 of every removed range before clearing it, and of every kept neighbour after patching.
 
-**Space left after 2.1:** about 110 bytes, spread over nine small gaps. The build prints the exact numbers. The largest are 19 B each in the date/time and Tools blocks, 15 B in the setup data block and 14 B in the `429D` block.
+**Space left after 2.1:** about 80 bytes, spread over small gaps. The build prints the exact numbers. The largest are 24 B (`3B8F` block) and 15 B each in the setup data and `429D` blocks.
 
 ## How it works (short version)
 
@@ -181,6 +186,7 @@ Notes for anyone changing this code:
 - **State between the hooks** is kept in the BDA inter-application area `40:F0-40:FF`, which nothing else uses during POST. `bu_final` clears it before the boot.
 - **After IDENTIFY, the master is selected again.** If a missing slave stays selected, AMI's disk setup at checkpoint 91h hangs. The emulator found this bug before any chip was burned.
 - **The restart after setup** is a keyboard-controller reset with CMOS shutdown code 0. AMI's chipset setup at checkpoint 05h turns the shadow RAM off again, so the EPROM is checksummed afresh. 86Box confirms the restart.
+- **Interrupts stay off.** AMI runs the early part of POST with interrupts off, and on a cold start the interrupt controllers are not set up yet. Nothing in the POST screen code may turn them on: `measure_clock` saves and restores the flag. An STI there is the most likely cause of the occasional hang at power-on or RESET seen with the fourth build.
 - **The clock**: the timing loop (500 passes of 32 × `DIV BX` + `LOOP`) is built at `0:7C00` so that it runs from RAM, and timed with PIT channel 2. The constants are the setup's per-instruction timings (386: DIV r16 22 clocks, LOOP 13). The setup itself still uses its 8-DIV loop, where the cache is always on.
 
 ## Build and test
@@ -189,8 +195,8 @@ Run these from this folder. You need NASM, Python 3 and `pip install unicorn pil
 
 ```
 python3 py/build_bubios.py     # builds binary/BUBIOS2_SY019L1.BIN from binary/base/
-python3 py/test_bubios.py      # 73 checks of the setup
-python3 py/test_post.py        # 83 checks of POST, countdown, setup visits, auto-detect, LBA (25-35 minutes)
+python3 py/test_bubios.py      # 74 checks of the setup
+python3 py/test_post.py        # 86 checks of POST, countdown, setup visits, auto-detect, LBA (25-35 minutes)
 python3 py/regress_echs.py     # ECHS INT 13h regression + INT 19h boot test
 python3 py/shots.py            # setup screenshots into shots/
 ```

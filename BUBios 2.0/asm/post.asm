@@ -59,7 +59,7 @@ CM_CHECK   equ 0x7E       ; = CM_FLAGS xor 0A5h, else the flags are ignored
 ST_FLAG    equ 0xF0       ; FLAG_UP = our screen is up (this POST)
 FLAG_UP    equ 0xB2
 ST_CPU     equ 0xF1       ; 3/4/5/6 = family, +80h = Cyrix core
-ST_FPU     equ 0xF2       ; 1 = coprocessor answered
+ST_FPU     equ 0xF2       ; 1 = coprocessor answered (probed at the end of POST)
 ST_SCH     equ 0xF3       ; colour scheme 0..5, 6 = monochrome
 ST_T0      equ 0xF4       ; word: RTC minute*60+second at the start
 ST_UNITS   equ 0xF6       ; word: 64 KB blocks counted so far
@@ -283,8 +283,9 @@ bu_memshow:
     add  ax, dx                    ; above 1 MB: AX+DX-1 = last block
     dec  ax
     jmp  short .set
-.base:                             ; below 1 MB the total is not known yet:
-    call cmos_ext                  ; use the extended memory found last time
+.base:                             ; below 1 MB the total is not known yet
+    xor  ax, ax                    ; (CMOS may still hold the last size):
+                                   ; count only, empty bar
 .set:
     mov  [ST_TOTAL], ax
     call vid_es
@@ -389,7 +390,8 @@ wait_units:
 .r: ret
 
 ; ---------------------------------------------------------------------
-; cpu_detect -> [ST_CPU], [ST_FPU]
+; cpu_detect -> [ST_CPU] (the coprocessor is probed by fpu_probe at the
+; end of POST, when interrupts and AMI's IRQ 13 handler are set up)
 ; ---------------------------------------------------------------------
 cpu_detect:
     xor  ax, ax                    ; Cyrix cores leave the flags alone on DIV
@@ -419,25 +421,6 @@ cpu_detect:
 .fam:
     or   ch, cl
     mov  [ST_CPU], ch
-    mov  byte [ST_FPU], 0          ; coprocessor: FNINIT/FNSTSW/FNSTCW probe
-    mov  eax, cr0
-    push eax
-    and  al, 0xF3                  ; EM and TS clear
-    mov  cr0, eax
-    fninit
-    mov  word [ST_T0], 0x5A5A      ; (scratch, set again right after)
-    fnstsw [ST_T0]
-    cmp  byte [ST_T0], 0
-    jne  .nofpu
-    fnstcw [ST_T0]
-    mov  ax, [ST_T0]
-    and  ax, 0x103F
-    cmp  ax, 0x003F
-    jne  .nofpu
-    inc  byte [ST_FPU]
-.nofpu:
-    pop  eax
-    mov  cr0, eax
     ret
 
 ; ZF=0 if EFLAGS bit EBX can be toggled
@@ -614,13 +597,6 @@ pstr_v:
     mov  ah, bh
     jmp  pstr
 
-; dots_or: at the end of POST print CS:SI, before it "..." (ES:DI, BH)
-dots_or:
-    test byte [ST_MISC], 2
-    jnz  .p
-    mov  si, s_dots
-.p: jmp  pstr_v
-s_dots: db "...", 0
 
 ; early_ports -- serial and parallel ports into the BDA the way AMI finds
 ; them at checkpoint 9Ah (after the memory test), so that they can be
@@ -728,16 +704,6 @@ draw_all:
     mov  si, [cs:bx+cpu_names]
 .cpu:
     mov  dx, POS(R_SYS, C_VAL)
-    call value_at
-    mov  si, s_none
-    cmp  byte [ST_FPU], 0
-    je   .fpu
-    mov  si, s_fpu387
-    test byte [ST_CPU], 0x7C       ; family 4 and up: on-chip
-    jz   .fpu
-    mov  si, s_fpuint
-.fpu:
-    mov  dx, POS(R_SYS, C_RVAL)
     call value_at
     call draw_memory
     call draw_floppies
@@ -1013,25 +979,6 @@ slash:
     stosw
     ret
 
-; ZF=0 if "Auto-Detect Disks at Boot" is on (CMOS 7Fh bit 0, checked)
-auto_on:
-    push ax
-    mov  al, CM_CHECK
-    call P_CMOSRD
-    mov  ah, al
-    mov  al, CM_FLAGS
-    call P_CMOSRD
-    xor  ah, al
-    cmp  ah, 0xA5
-    jne  .off
-    test al, 1
-    pop  ax
-    ret
-.off:
-    cmp  al, al                    ; ZF=1
-    pop  ax
-    ret
-
 ; ide_wait -- poll 1F7h until (status AND AH) = AL; CX = timeout (15 ms
 ; units).  If AH has bit 0, a set ERR bit (with BSY clear) ends the wait.
 ; CF=1 on timeout or error.  DX = 1F7h on return.
@@ -1151,6 +1098,33 @@ auto_set:
     inc  al
     ret
 
+s_countdown:db "Press DEL to run Setup, any other key to boot now ... ", 0
+; fpu_probe -> [ST_FPU] = 1 if a coprocessor answers FNINIT/FNSTSW/
+; FNSTCW. Run at the end of POST only: early in POST (interrupts off, the
+; PICs possibly not set up after power-on) a 387 left busy could stall it.
+fpu_probe:
+    mov  byte [ST_FPU], 0
+    xor  al, al                    ; clear the busy latch
+    out  0xF0, al
+    mov  eax, cr0
+    push eax
+    and  al, 0xF3                  ; EM and TS clear
+    mov  cr0, eax
+    fninit
+    mov  word [ST_UNITS], 0x5A5A   ; (scratch: bu_final sets ST_UNITS
+    fnstsw [ST_UNITS]              ;  right after this)
+    cmp  byte [ST_UNITS], 0
+    jne  .no
+    fnstcw [ST_UNITS]
+    mov  ax, [ST_UNITS]
+    and  ax, 0x103F
+    cmp  ax, 0x003F
+    jne  .no
+    inc  byte [ST_FPU]
+.no:pop  eax
+    mov  cr0, eax
+    ret
+
 post2_end:
 
 ; =====================================================================
@@ -1162,6 +1136,19 @@ section post3 start=0x2400 vstart=0x429D
 ;   clock (once measured), cache, shadow RAM, RTC battery, ports, ROMs
 ; ---------------------------------------------------------------------
 fill_values:
+    mov  dx, POS(R_SYS, C_RVAL)    ; coprocessor: probed at the end of
+    mov  cx, 12                    ; POST (fpu_probe), "..." until then
+    call clear_at
+    sub  di, 24
+    call value_attr
+    mov  si, s_none
+    cmp  byte [ST_FPU], 0
+    je   .fp
+    mov  si, s_fpu387
+    test byte [ST_CPU], 0x7C       ; family 4 and up: on-chip
+    jz   .fp
+    mov  si, s_fpuint
+.fp:call dots_or
     mov  dx, POS(R_SYS+1, C_VAL)   ; clock
     mov  cx, 12
     call clear_at
@@ -1331,6 +1318,7 @@ bu_final:
     cmp  byte [ST_FLAG], FLAG_UP
     jne  .out
     or   byte [ST_MISC], 2
+    call fpu_probe
     call vid_es
     call cmos_ext                  ; memory: as found by POST (CMOS 31h:30h)
     mov  [ST_UNITS], ax
@@ -1671,7 +1659,8 @@ measure_clock:
     mov  al, 0xCB                  ; RETF
     stosb
     pop  es
-    cli
+    pushf                          ; keep the caller's interrupt flag:
+    cli                            ; early in POST interrupts are off
     in   al, 0x61
     push ax
     and  al, 0xFC
@@ -1695,7 +1684,7 @@ measure_clock:
     xchg ax, bx                    ; BX = elapsed PIT ticks
     pop  ax
     out  0x61, al
-    sti
+    popf
     xor  si, si                    ; K for 386 / 486 / 586+
     mov  al, [ST_CPU]
     and  al, 0x7F
@@ -1801,7 +1790,6 @@ s_system:   db "System", 0
 s_plus:     db " + ", 0
 s_ok:       db "OK", 0
 s_low:      db "Low", 0
-s_st_mem:   db "Testing memory ...", 0
 s_st_del:   db "Press DEL to run Setup", 0
 s_st_dev:   db "Checking devices ...", 0
 s_st_err:   db "POST found a problem", 0
@@ -1809,7 +1797,25 @@ s_st_bootc: db "Booting: C: then A:", 0
 s_st_boota: db "Booting: A: then C:", 0
 s_post:     db 0xB3, " POST ", 0
 s_sec:      db " s", 0
-s_countdown:db "Press DEL to run Setup, any other key to boot now ... ", 0
+
+; ZF=0 if "Auto-Detect Disks at Boot" is on (CMOS 7Fh bit 0, checked)
+auto_on:
+    push ax
+    mov  al, CM_CHECK
+    call P_CMOSRD
+    mov  ah, al
+    mov  al, CM_FLAGS
+    call P_CMOSRD
+    xor  ah, al
+    cmp  ah, 0xA5
+    jne  .off
+    test al, 1
+    pop  ax
+    ret
+.off:
+    cmp  al, al                    ; ZF=1
+    pop  ax
+    ret
 
 post3_end:
 
@@ -2143,6 +2149,7 @@ s_on:       db "On", 0
 s_off:      db "Off", 0
 s_help_auto:db "Identify the IDE drives at every boot and set them up", 0
 
+s_st_mem:   db "Testing memory ...", 0
 tools_end:
 
 ; ---------------------------------------------------------------------
@@ -2162,3 +2169,14 @@ cmos_sum:                          ; AX = both AMI CMOS checksums and the
     pop  bx
     add  ax, bx
     ret
+
+; ---------------------------------------------------------------------
+section code2
+; ---------------------------------------------------------------------
+; dots_or: at the end of POST print CS:SI, before it "..." (ES:DI, BH)
+dots_or:
+    test byte [ST_MISC], 2
+    jnz  .p
+    mov  si, s_dots
+.p: jmp  pstr_v
+s_dots: db "...", 0

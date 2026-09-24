@@ -1,8 +1,27 @@
 # BUBios changelog
 
+## 2.1, fifth build — 2026-09-24
+
+ROM `binary/BUBIOS2_SY019L1.BIN`, MD5 `d240bc3299046163126bc1d5834b2e16`
+
+- **Hang at the video BIOS sign-on after power-on or RESET, found.** AMI runs this part of POST with interrupts off; on a cold start the interrupt controllers are not set up yet. The clock measurement (`measure_clock`) ended with STI and so turned interrupts on in the middle of it. Any interrupt that arrived before AMI set up the controllers then jumped through an undefined vector. It now saves and restores the interrupt flag (PUSHF/CLI … POPF). New test: the interrupt flag is still off after the POST screen's early work (the fourth build fails it).
+- **Coprocessor probe moved to the end of POST**, as suggested. By then interrupts and AMI's IRQ 13 handler are in place. The field shows `...` until then, like the cache. The early F0h/F1h reset from the fourth build is gone; only the busy latch is cleared (F0h) before the probe.
+- `test_post.py`: 86 checks.
+
+## 2.1, fourth build — 2026-09-24
+
+ROM MD5 `f70405af52233430e101d90f877a8269` (replaced by the fifth build)
+
+Bugs found on the board with the third build:
+
+- **Setup Summary showed "Total Memory 0K" with 64 MB.** Total = extended + 1024 KB was added in 16 bits, and 64512 + 1024 = 65536 wraps to 0. It is now added in 32 bits (65536K).
+- **Memory bar jumped to 2 cells, went back to 0, then filled again (64 MB).** Before the test reaches 1 MB, the total is not known yet. BUBios used the size stored in CMOS 30h/31h by the previous boot. After fitting more RAM (16 → 64 MB), that value is too small, so the first MB looked like 1/16 of the bar. Below 1 MB the bar now stays empty (the KB count still runs). It fills from the real total as soon as AMI reports it.
+- **Occasional hang after RESET** (video BIOS sign-on and AMI's ID lines on screen): this build suspected the coprocessor probe and reset the 387 first. That was not the cause; see the fifth build.
+- `test_bubios.py`: 64 MB Total Memory check (74). `test_post.py`: memory bar check after a RAM upgrade (84).
+
 ## 2.1, third build — 2026-09-24
 
-ROM `binary/BUBIOS2_SY019L1.BIN`, MD5 `7cb6cd433fc576ce2dc9781210522f6c`
+ROM MD5 `7cb6cd433fc576ce2dc9781210522f6c` (replaced by the fourth build)
 
 The second build ran on the real board: a 20 GB master was auto-detected and used through LBA, a 4 GB slave through ECHS, and Windows 95 B installed. Visiting setup brought up these bugs, now fixed:
 

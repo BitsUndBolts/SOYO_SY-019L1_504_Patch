@@ -108,6 +108,21 @@ check('cache "..." until AMI enables it, then the size', '...' in rows(snap.get(
       and 'Disabled' not in rows(snap.get('t', ''))[R_CLOCK] and '64 KB' in rows(q.text())[R_CLOCK],
       rows(snap.get('t', ''))[R_CLOCK])
 
+# interrupts: AMI runs this part of POST with IF=0 (PICs not set up yet on a
+# cold start); the POST screen code must not turn them on
+import unicorn as _uc
+from unicorn.x86_const import UC_X86_REG_EFLAGS
+iflags = []
+q = Post(ROM)
+for name in ('bu_post_init', 'early_ports'):
+    q.mu.hook_add(_uc.UC_HOOK_CODE, lambda uc, a, s, u: iflags.append((u, uc.reg_read(UC_X86_REG_EFLAGS) & 0x200)),
+                  name, begin=0xF0000 + SYM[name], end=0xF0000 + SYM[name])
+q.run(max_ms=40000, until=lambda z: COUNTDOWN in z.text())
+check('interrupt flag left as AMI had it (off) through the clock measurement', iflags[:2] == [('bu_post_init', 0), ('early_ports', 0)],
+      iflags[:4])
+check('coprocessor probed at the end of POST', any(x in rows(q.text())[2] for x in ('387 present', 'On-chip')),
+      rows(q.text())[2])
+
 # ---------------------------------------------------------------- countdown keys
 q = Post(ROM); q.type_key(0x39, at_ms=t_cd + 500); r = q.run(max_ms=40000)
 check('any other key boots at once', r == 'int19' and q.t / 1e6 < t_cd + 700, '%s %.0f ms' % (r, q.t / 1e6 - t_cd))
@@ -150,8 +165,8 @@ check('mid-test: status says DEL enters setup', 'Press DEL to run Setup' in m[R_
 check('mid-test: disks, floppies, ROMs, battery already shown',
       'SanDisk SDCFB-8192' in m[R_C] and '7875 MB' in m[R_CGEO] and 'None' in m[R_D] and '1.44 MB' in m[R_FDD]
       and 'C000 2K' in m[R_ROMS] and 'OK' in m[R_RTC] and 'Video + System' in m[R_SHADOW], '\n'.join(m))
-check('mid-test: "..." for clock, cache and ports not known yet',
-      m[R_CLOCK].count('...') == 2 and '...' in m[R_PORTS], '\n'.join(m))
+check('mid-test: "..." for coprocessor, clock, cache and ports not known yet',
+      m[R_CLOCK].count('...') == 2 and '...' in m[R_PORTS] and 'Coprocessor  ...' in m[2], '\n'.join(m))
 check('no ports at all: "None" at the end', 'None' in rows(t)[R_PORTS], rows(t)[R_PORTS])
 snap = {}
 q = Post(ROM, com=(0x3F8, 0x2F8), lpt=(0x378,))
@@ -175,6 +190,17 @@ for mb in (4, 32, 48, 64):
     q, r, t2, _ = boot(ms=70000, mem_mb=mb, cmos=make_cmos(ext_kb=(mb - 1) * 1024))
     check('%d MB: count %d KB, full bar' % (mb, mb * 1024),
           ('%d KB' % (mb * 1024)) in rows(t2)[R_MEM] and '░' not in rows(t2)[R_MEM], rows(t2)[R_MEM])
+
+c = make_cmos(ext_kb=64512); c[0x30:0x32] = struct.pack('<H', 15360)   # 64 MB fitted, CMOS still says 16 MB
+q = Post(ROM, mem_mb=64, cmos=c)
+fills = []
+def watch(z):
+    row = rows(z.text())[R_MEM]
+    if 'KB' in row: fills.append(row.count('█'))
+    return COUNTDOWN in z.text()
+q.run(max_ms=80000, until=watch)
+check('64 MB after a RAM upgrade (CMOS still 16 MB): the bar never goes back',
+      fills and all(b >= a for a, b in zip(fills, fills[1:])) and fills[-1] == 40, fills[:40])
 
 # ---------------------------------------------------------------- drives
 q, r, t2, _ = boot(drive=None)

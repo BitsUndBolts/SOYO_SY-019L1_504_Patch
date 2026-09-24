@@ -39,6 +39,10 @@ check('summary shown on entry', tab(s) == 'Summary', tab(s))
 for want in ('OPTi 82C495SLC', '15360K', '16384K', '640K', '7875 MB  [47]', '16000/16/63',
              '1002/255/63', '1.44 MB', '1.2  MB', 'VGA/PGA/EGA', 'A:, C:', 'AMIBIOS 11/11/92'):
     check('summary shows ' + want, want in t)
+s64 = Setup(ROM, timing_loop=LOOP); s64.ext_kb = 64512
+assert s64.run() == 'key'
+check('64 MB: Total Memory 65536K (no 16-bit overflow)', '65536K' in s64.text() and '64512K' in s64.text(),
+      [l for l in s64.text().split('\n') if 'Memory' in l])
 check('clock measured', re.search(r'CPU Clock .* \d+\.\d MHz', t) is not None)
 
 # ---- tab navigation

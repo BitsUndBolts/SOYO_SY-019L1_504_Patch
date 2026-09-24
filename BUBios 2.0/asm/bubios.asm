@@ -557,6 +557,7 @@ put_chs:                           ; CX / BL / BH
     jmp  put_num
 num_k:                             ; AX -> "nnnnK"
     movzx eax, ax
+num_k32:                           ; EAX -> "nnnnnK"
     call buf_begin
     call put_num
     mov  al, 'K'
@@ -621,8 +622,9 @@ f_ext:
     jmp  num_k
 f_total:
     call ext_kb
-    add  ax, 1024
-    jmp  num_k
+    movzx eax, ax                  ; 32 bits: 64 MB is 65536K
+    add  eax, 1024
+    jmp  num_k32
 
 f_fda:
     mov  al, [CMOS+0x10]
