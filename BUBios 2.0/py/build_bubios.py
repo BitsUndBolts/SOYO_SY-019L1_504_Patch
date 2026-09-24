@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Build the BUBios 2.0 ROM on top of the hardware-confirmed ECHS ROM.
+Build the BUBios 2.1 ROM on top of the hardware-confirmed ECHS ROM.
 
     python3 py/build_bubios.py        (from the BUBios 2.0 folder; needs NASM)
 
@@ -72,8 +72,11 @@ for lo, hi, what in DEAD:
 for lo, hi, what in DEAD:
     rom[lo:hi] = bytes(hi - lo)
 
+LBA_BLK   = (0x3292, 0x3482)       # INT 13h extensions (2.1)
+TOOLS_BLK = (0x19B0, 0x1A7A)       # setup: auto-detect switch (2.1)
 BLOCKS = (('code', CODE_BLK), ('data', DATA_BLK), ('code2', CODE2_BLK), ('code3', CODE3_BLK),
-          ('post1', POST1_BLK), ('post2', POST2_BLK), ('post3', POST3_BLK))
+          ('post1', POST1_BLK), ('post2', POST2_BLK), ('post3', POST3_BLK),
+          ('lba', LBA_BLK), ('tools', TOOLS_BLK))
 for name, (lo, hi) in BLOCKS:
     v, st, ln = sec[name]
     assert v == lo, name
@@ -158,6 +161,11 @@ patch(0x1613, bytes.fromhex('e8a100'), call(0x1613, 'bu_refresh'), 'clear screen
 patch(0x164C, bytes.fromhex('e87123'), call(0x164C, 'bu_final'), 'config box -> bu_final')
 patch(0x120D, bytes.fromhex('e84604'), call(0x120D, 'bu_errors'), 'error list (early) -> bu_errors')
 patch(0x158C, bytes.fromhex('e8c700'), call(0x158C, 'bu_errors'), 'error list -> bu_errors')
+# 2.1: AMI's on-screen copyright check (F3DB, called at checkpoints 40h,
+# 60h, 95h) crashes POST on purpose when the line is not on screen: RET
+patch(0xF3DB, bytes.fromhex('60b40332ff'), b'\xc3', 'copyright screen check -> RET')
+# 2.1: INT 13h entry -> bu_int13 (extensions AH=41h-48h, then AMI's code)
+patch(0xA3E7, bytes.fromhex('80fa80fbfc'), b'\xe9' + rel16(0xA3E7, sym['bu_int13']) + NOP * 2, 'INT 13h -> bu_int13')
 # the old main-menu handler table still names the Hard Disk Utility: point
 # that entry at a RET (end of the error dialog routine) instead of freed space
 assert rom[0x4A43] == 0xC3

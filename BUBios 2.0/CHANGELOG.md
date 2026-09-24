@@ -1,5 +1,58 @@
 # BUBios changelog
 
+## 2.1, second build — 2026-09-24
+
+ROM `binary/BUBIOS2_SY019L1.BIN`, MD5 `ef2babff61e23b201d0543b558b5fac2`
+
+After the first 2.1 build ran on the real board (countdown, auto-detect, errors and boot all fine):
+
+- **Ports shown before the memory test.** BUBios probes COM and LPT the same way AMI does at checkpoint 9Ah and fills in the BDA early. AMI's own probe later gives the same list.
+- **Clock: a sturdier early reading.** The POST timing loop now does 32 DIVs per pass instead of 8, so slow code fetches with the cache still off hardly change the result. If the early reading is still not a standard clock, it is tried again after the memory test and at the end of POST.
+- **`...` placeholders** for the clock, the cache, the ports and a disk that has not answered yet, until the value is known. At the end of POST an unknown cache shows *Disabled*, no ports shows *None*.
+- **Disk D: "None" with auto-detect on.** The row was left empty when there was no slave.
+- **BIOS ID string** in the status bar moved one column left. It now ends in column 78, like the title bar, and is not cut off by the monitor's overscan.
+- `post_emu.py` can now emulate serial and parallel ports (`com=`, `lpt=`); `test_post.py` has 77 checks.
+
+## 2.1 — 2026-09-24 (first build)
+
+ROM MD5 `363aeb9809439853afa0953ae00ba7cd` (replaced by the second build)
+
+Changes after the test of 2.0 on the real board.
+
+### New
+
+- **Boot countdown.** After POST, the screen shows *Press DEL to run Setup, any other key to boot now ... 3* for 3 seconds.
+  - DEL runs the setup. If changes were saved, POST restarts to apply them.
+  - Any other key boots at once.
+- **Clean start for DOS.** The video mode is set again before the boot, so DOS starts on a clear screen in normal colours.
+- **Video BIOS sign-on kept.** The card's own start-up screen stays for 2 s before the POST screen (only if the card shows one).
+- **Automatic hard disk detection** (Tools page: *Auto-Detect Disks at Boot*, off by default).
+  - When on, IDE drives are identified at every boot and entered in CMOS as type 47 with their own geometry, before AMI sets up the disks.
+  - The POST screen shows them as *Auto*.
+- **LBA: INT 13h extensions** (EDD 1.1, functions 41h-44h, 47h, 48h), 28-bit LBA up to 128 GB.
+  - CHS functions and the ECHS translation are unchanged.
+  - The POST screen shows the LBA size of drives larger than 8.4 GB.
+- **`int13x.py`** runs INT 13h calls in the POST emulator. **`asm/lba_test_mbr.asm`** is a boot sector that tests the extensions on a real or emulated machine.
+
+### Changed
+
+- The fields are filled in as early as possible: floppies, disk names and geometry, option ROMs, shadow RAM and battery before the memory test. The clock is shown too, if the early measurement is valid.
+- The 1 MB memory map row is gone. The bar and the KB count remain.
+- The BUBios line at the bottom right and the AMI copyright line are gone. AMI's copyright check (`F3DB`) is switched off. It was a tamper check, not an error check.
+- The version reads 2.1 (setup title bar, Summary page, POST screen).
+
+### Fixed (found in testing 2.1)
+
+- After asking a missing slave for IDENTIFY, the slave stayed selected, and AMI's disk setup hung at checkpoint 91h. The master is now selected again.
+- The clock value on the POST screen was printed from a clobbered register (showed 284.8 MHz in 86Box).
+- The cache was briefly shown as *Disabled* before AMI enables it at the end of POST.
+- The 42h/43h transfer advanced the buffer twice per sector.
+
+### Unchanged
+
+- The ECHS disk code: `regress_echs.py` passes.
+- The order of POST: the POST checkpoint sequence is identical to 1.0.
+
 ## 2.0 — 2026-09-24
 
 ROM `binary/BUBIOS2_SY019L1.BIN`, MD5 `52eea91efbd108f8fff972c79e31f875`
@@ -27,7 +80,7 @@ ROM `binary/BUBIOS2_SY019L1.BIN`, MD5 `52eea91efbd108f8fff972c79e31f875`
 
 ### Found along the way
 
-- AMI's POST checks that `(C) American Megatrends Inc.,` is on screen at row 21 and crashes on purpose if it is missing. The check only runs when the CMOS is invalid, so it only showed up in the test with a cleared CMOS. The POST screen keeps the line at that position (details in the README).
+- AMI's POST checks that `(C) American Megatrends Inc.,` is on screen at row 21 and crashes on purpose if it is missing. The check only runs when the CMOS is invalid, so it only showed up in the test with a cleared CMOS. 2.0 kept the line at that position; 2.1 switches the check off.
 
 ## 1.0 — 2026-09-23
 

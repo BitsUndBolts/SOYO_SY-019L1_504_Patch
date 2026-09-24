@@ -43,7 +43,7 @@ check('clock measured', re.search(r'CPU Clock .* \d+\.\d MHz', t) is not None)
 
 # ---- tab navigation
 check('title starts in column 0', t.startswith('BUBios (tm)'), t[:20])
-check('version 2.0 in title and Summary', 'Ver 2.0' in t and re.search(r'BUBios .* 2\.0', t.split('\n')[19]) is not None)
+check('version 2.1 in title and Summary', 'Ver 2.1' in t and re.search(r'BUBios .* 2\.1', t.split('\n')[19]) is not None)
 check('math unit detected (emulator has an FPU)', re.search(r'Math Unit .* Present', t) is not None)
 s.step(RIGHT);      check('Right does not switch tabs', tab(s) == 'Summary', tab(s))
 s.step(LEFT);       check('Left does not switch tabs', tab(s) == 'Summary', tab(s))
@@ -102,14 +102,31 @@ check('F2 changes colour scheme', a0 != a1, (hex(a0), hex(a1)))
 # ---- Tools: load BIOS defaults
 s = new()
 s.step(SHIFT_TAB, SHIFT_TAB)                            # Tools
-check('Tools page lists 4 entries', all(x in s.text() for x in
-      ('Load BIOS Setup Defaults', 'Load Power-On Defaults', 'Change Password', 'Auto-Detect Hard Disk')))
+check('Tools page lists 5 entries', all(x in s.text() for x in
+      ('Load BIOS Setup Defaults', 'Load Power-On Defaults', 'Change Password', 'Auto-Detect Hard Disk',
+       'Auto-Detect Disks at Boot: Off')), s.text())
 s.step(ENTER)
 check('defaults prompt appears', '(Y/N)' in s.text(), s.text())
 s.step(Y(), ENTER)
 check('defaults loaded message', 'Default values loaded' in s.text())
 s.step(0x3920)
 check('back on Tools after defaults', tab(s) == 'Tools', tab(s))
+
+# ---- Tools: Auto-Detect Disks at Boot toggle (CMOS 7Fh, check byte 7Eh)
+s = new()
+s.step(SHIFT_TAB, SHIFT_TAB, DOWN, DOWN, DOWN, DOWN)
+check('auto-detect help text', 'Identify the IDE drives at every boot' in s.text(), s.text())
+s.step(ENTER)
+check('auto-detect toggled On', 'Auto-Detect Disks at Boot: On' in s.text(), s.text())
+check('auto-detect On in CMOS', s.cmos[0x7F] == 1 and s.cmos[0x7E] == 0xA4, (hex(s.cmos[0x7F]), hex(s.cmos[0x7E])))
+s.step(ENTER)
+check('auto-detect toggled Off', 'Auto-Detect Disks at Boot: Off' in s.text() and s.cmos[0x7F] == 0
+      and s.cmos[0x7E] == 0xA5, s.text())
+s.step(ESC)
+check('Esc leaves the Tools page normally', 'Auto-Detect' not in s.text() or tab(s) != 'Tools', tab(s))
+c = default_cmos(); c[0x7F] = 1; c[0x7E] = 0xA4; fix_cmos_checksum(c)
+s = new(cmos=c); s.step(SHIFT_TAB, SHIFT_TAB)
+check('auto-detect On read back from CMOS', 'Auto-Detect Disks at Boot: On' in s.text())
 
 # ---- numeric date / time entry on the Standard page
 def digits(txt): return [ord(c) for c in txt]

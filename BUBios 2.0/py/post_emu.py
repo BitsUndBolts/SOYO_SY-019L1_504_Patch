@@ -115,20 +115,30 @@ class IdeDrive:
         w[47] = 0x8001; w[49] = 0x0200
         w[53] = 1; w[54] = s.C; w[55] = s.H; w[56] = s.S
         tot = s.C * s.H * s.S
-        w[57] = tot & 0xFFFF; w[58] = tot >> 16; w[60] = tot & 0xFFFF; w[61] = tot >> 16
+        w[57] = tot & 0xFFFF; w[58] = tot >> 16
+        lt = s.total(); w[60] = lt & 0xFFFF; w[61] = lt >> 16
         return struct.pack('<256H', *w)
     def lba(s):
+        if s.r[6] & 0x40:                                   # LBA addressing
+            return s.r[3] | (s.r[4] << 8) | (s.r[5] << 16) | ((s.r[6] & 0x0F) << 24)
         c = s.r[4] | (s.r[5] << 8); h = s.r[6] & 0xF; sec = s.r[3]
         return (c * s.H + h) * s.S + sec - 1
+    def total(s): return s.lba_total if getattr(s, 'lba_total', None) else s.C * s.H * s.S
     def command(s, cmd):
         s.log.append(cmd)
         if cmd == 0xEC:
             s.buf = s.identify(); s.bufpos = 0; s.status = 0x58; return True
-        if cmd in (0x20, 0x21):
+        n = s.r[2] or 256
+        if cmd in (0x20, 0x21, 0x30, 0x31, 0x40, 0x41):
             s.cur_lba = s.lba()
-            s.buf = b''.join(s.sectors.get(s.cur_lba + i, b'\0' * 512) for i in range(s.r[2] or 256))
+            s.log.append(('lba', s.cur_lba, n, 'LBA' if s.r[6] & 0x40 else 'CHS'))
+            if s.cur_lba + n > s.total():                   # beyond the end: IDNF
+                s.status = 0x51; s.error = 0x10; return True
+        if cmd in (0x20, 0x21):
+            s.buf = b''.join(s.sectors.get(s.cur_lba + i, bytes([(s.cur_lba + i) & 0xFF]) * 512) for i in range(n))
             s.bufpos = 0; s.status = 0x58; return True
         if cmd in (0x30, 0x31):
+            s.wr_lba = s.cur_lba; s.wr_left = n
             s.status = 0x58; s.buf = b''; return True
         s.status = 0x50; return True
     def read_block(s, n):
@@ -139,8 +149,9 @@ class IdeDrive:
 # ------------------------------------------------------------------ the machine
 class Post:
     def __init__(s, rom, cmos=None, mem_mb=16, drive=(16000, 16, 63), drive_model='SanDisk SDCFB-8192',
-                 keys=None, trace_ports=False, fpu=True, slave=None, slave_model='WDC AC24300L', video='vga'):
+                 keys=None, trace_ports=False, fpu=True, slave=None, slave_model='WDC AC24300L', video='vga', com=(), lpt=()):
         s.rom = rom
+        s.com = set(com); s.lpt = {p: 0 for p in lpt}        # serial / parallel ports present
         s.mu = mu = Uc(UC_ARCH_X86, UC_MODE_16)
         s.mem_mb = mem_mb
         mu.mem_map(0, mem_mb << 20)
@@ -208,7 +219,9 @@ class Post:
         mu.hook_add(UC_HOOK_INSN, s._out, aux1=UC_X86_INS_OUT)
         mu.hook_add(UC_HOOK_INTR, s._intr)
         # REP INSW / OUTSW sites in the ROM (Unicorn has no string-I/O hooks)
-        for off in (0xA733, 0xAF81, 0xA63D, 0xA797):
+        sites = [0xA733, 0xAF81, 0xA63D, 0xA797]
+        sites += [o for o in range(0x3292, 0x3482) if rom[o:o + 2] in (b'\xf3\x6d', b'\xf3\x6f')]
+        for off in sites:
             if rom[off:off + 2] in (b'\xf3\x6d', b'\xf3\x6f'):
                 mu.hook_add(UC_HOOK_CODE, s._repio, begin=0xF0000 + off, end=0xF0000 + off)
         mu.reg_write(UC_X86_REG_CS, 0xF000)
@@ -299,6 +312,8 @@ class Post:
     # ---------------------------------------------------------- ports
     def _in(s, uc, port, size, ud):
         s.t += NS_PER_IO
+        if port == 0x1F0 and size == 2 and s.ide is not None:
+            return int.from_bytes(s.ide.read_block(2), 'little')
         v = s.inb(port)
         if size == 2: v = v | (s.inb(port + 1) << 8)
         if s.trace_ports: s.portlog.append(('in', hex(port), hex(v)))
@@ -353,7 +368,7 @@ class Post:
             d = s.ide
             if d is None: return 0x00 if s.ides[0] else 0xFF
             if port in (0x1F7, 0x3F6): return d.status
-            if port == 0x1F1: return 0x01 if d.log and d.log[-1] == 0x90 else 0
+            if port == 0x1F1: return getattr(d, 'error', 0) if d.status & 1 else (0x01 if d.log and d.log[-1] == 0x90 else 0)
             if port == 0x1F0: return int.from_bytes(d.read_block(1), 'little')
             return d.r.get(port - 0x1F0, 0)
         if port == 0x3F4:
@@ -367,6 +382,8 @@ class Post:
             base = 0x3D0 if port == 0x3D5 else 0x3B0
             if base != s.crtc_base: return 0xFF          # no adapter at that address
             return s.crtc[s.crtc_idx & 0x1F]
+        if port - 2 in s.com: return 0x01                     # UART IIR: no interrupt pending
+        if port in s.lpt: return s.lpt[port]                  # printer data latch
         return 0xFF
     def _out(s, uc, port, size, val, ud):
         s.t += NS_PER_IO
@@ -374,6 +391,7 @@ class Post:
         s.outb(port, val & 0xFF)
         if size == 2: s.outb(port + 1, (val >> 8) & 0xFF)
     def outb(s, port, v):
+        if port in s.lpt: s.lpt[port] = v
         if port == 0x80:
             s.p80.append((v, s.where_ip())); s.page[0] = v; return
         if port == 0x70: s.cidx = v & 0x7F; return
@@ -498,6 +516,11 @@ class Post:
         uc.reg_write(UC_X86_REG_CS, 0xF000); uc.reg_write(UC_X86_REG_EIP, 0xFFF0)
         uc.reg_write(UC_X86_REG_EDX, 0x0308)
         s.halted_at = None; s.reset_pending = False
+        if s.cmos[0x0F] == 0:
+            # cold restart (shutdown code 0): AMI switches the shadow RAM off at
+            # checkpoint 05 and checksums the EPROM. Shadow RAM is not modelled,
+            # so put the ROM back (the setup keeps data in F000:E000-E1FF).
+            uc.mem_write(0xF0000, bytes(s.rom))
     @property
     def ide(s):
         return s.ides[1 if s.ide_r6 & 0x10 else 0]
@@ -513,8 +536,15 @@ class Post:
             uc.mem_write(lin(es, di), data)
             uc.reg_write(UC_X86_REG_DI, (di + cx * 2) & 0xFFFF)
         else:
-            si = uc.reg_read(UC_X86_REG_SI); uc.reg_write(UC_X86_REG_SI, (si + cx * 2) & 0xFFFF)
-            if s.ide: s.ide.status = 0x50; s.raise_irq(14)
+            si = uc.reg_read(UC_X86_REG_SI); ds = uc.reg_read(UC_X86_REG_DS)
+            d = s.ide
+            if d:
+                if getattr(d, 'wr_left', 0):
+                    d.sectors[d.wr_lba] = bytes(uc.mem_read(lin(ds, si), cx * 2))
+                    d.wr_lba += 1; d.wr_left -= 1
+                d.status = 0x58 if getattr(d, 'wr_left', 0) else 0x50
+                s.raise_irq(14)
+            uc.reg_write(UC_X86_REG_SI, (si + cx * 2) & 0xFFFF)
         uc.reg_write(UC_X86_REG_CX, 0)
         uc.reg_write(UC_X86_REG_IP, (addr - 0xF0000 + 2) & 0xFFFF)
         s.t += cx * 1000
@@ -577,7 +607,8 @@ class Post:
         if ah == 0x00:
             s.vmode = al & 0x7F
             s.vbase = 0xB0000 if s.vmode == 7 else 0xB8000
-            uc.mem_write(s.vbase, b'\x20\x07' * 2000); s.cur = (0, 0)
+            uc.mem_write(s.vbase, b'\x20\x07' * 2000); s.cur = (0, 0); uc.mem_write(0x450, bytes(16))
+            s.curshape = 0x0B0C if s.vmode == 7 else 0x0607
             uc.mem_write(0x449, bytes([7 if s.vmode == 7 else 3])); uc.mem_write(0x44A, struct.pack('<H', 80))
             uc.mem_write(0x484, bytes([24]))
         elif ah == 0x01: s.curshape = cx

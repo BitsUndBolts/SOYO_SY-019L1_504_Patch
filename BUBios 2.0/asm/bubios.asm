@@ -1,9 +1,10 @@
 ; =====================================================================
 ;  BUBios -- MR-BIOS-style front end for the AMIBIOS 11/11/92 setup
-;  (SOYO SY-019L1, OPTi 82C495SLC, 27C512) -- version 2.0
+;  (SOYO SY-019L1, OPTi 82C495SLC, 27C512) -- version 2.1
 ;
-;  2.0 adds the POST screen in post.asm (included at the end of this file)
-;  and removes dead AMI code; see README.md.
+;  2.0 added the POST screen in post.asm (included at the end of this
+;  file) and removed dead AMI code; 2.1 adds drive auto-detection at boot
+;  and the INT 13h extensions (LBA); see README.md.
 ;
 ;  Built on top of the hardware-confirmed ECHS ROM
 ;  (binary/SY019L1_27C512_CHSPATCH.BIN of the parent project).
@@ -250,7 +251,7 @@ bu_main:
 bu_list:
     xor  cx, cx
     mov  si, tools_list
-    mov  cl, 4
+    mov  cl, 5
     cmp  byte [BU_TAB], 4
     je   .r
     mov  si, exit_list
@@ -338,6 +339,7 @@ bu_tabattr:
 ; bu_draw_page -- Summary / Tools / Exit pages
 ; ---------------------------------------------------------------------
 bu_draw_page:
+    call bu_autolabel              ; 2.1: "Auto-Detect Disks at Boot: On/Off"
     xor  bx, bx
     mov  ax, s_foot_main
     call bu_hdr
@@ -1040,6 +1042,11 @@ tools_list:
     dw S_HELP_DET
     db 8
     dw H_DETECT
+    dw BU_AUTOLBL
+    dw s_help_auto
+    db 8
+    dw bu_autotoggle
+
 exit_list:
     dw s_it_sav
     dw S_HELP_SAV
@@ -1128,7 +1135,7 @@ tab_attrs:
     db 0x20, 0x60, 0x20, 0x70, 0x70, 0x70, 0x20, 0x60
     db 0x20, 0x70, 0x70, 0x70, 0x20, 0x60, 0x20, 0x70
 
-s_title:   db "BUBios (tm)    Copyright (c) 2026 Bits und Bolts    Ver 2.0    Port OPTi 495SLC", 0
+s_title:   db "BUBios (tm)    Copyright (c) 2026 Bits und Bolts    Ver 2.1    Port OPTi 495SLC", 0
 s_tab0:    db " Summary ", 0
 s_tab1:    db " Standard ", 0
 s_tab2:    db " Advanced ", 0
@@ -1170,7 +1177,7 @@ l_video:   db "Video Display", 0
 
 s_chipset: db "OPTi 82C495SLC", 0
 s_core:    db "AMIBIOS 11/11/92", 0
-s_ver:     db "2.0", 0
+s_ver:     db "2.1", 0
 s_386:     db "80386", 0
 s_486:     db "80486", 0
 s_586:     db "Pentium", 0
