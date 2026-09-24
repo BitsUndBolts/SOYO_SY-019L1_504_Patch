@@ -349,15 +349,25 @@ check('after AMI\'s own SETUP visit the countdown does not open SETUP again', r 
       and COUNTDOWN in '\n'.join(tt), (r, hex(q.cmos[0x0E])))
 
 # ---------------------------------------------------------------- floppy change line (INT 13h 15h/16h)
-q = Post(ROM); q.run(max_ms=40000)
+# a hard disk: the change line is reported and read through port 3F7h
+q = Post(ROM, drive=(8912, 15, 63), drive_model='WDC AC24300L', cmos=make_cmos(drive=(8912, 15, 63))); q.run(max_ms=40000)
 x = call13(q, 0x1500, dx=0)
-check('floppy A: INT 13h 15h reports a change line (AH=02)', x['ax'] >> 8 == 2 and x['cf'] == 0, H(x))
+check('hard disk only: INT 13h 15h reports a change line for A: (AH=02)', x['ax'] >> 8 == 2 and x['cf'] == 0, H(x))
 q.fdc_dchg = True
 x = call13(q, 0x1600, dx=0)
 check('floppy A: INT 13h 16h after a disk swap: changed (AH=06)', x['ax'] >> 8 == 6 and x['cf'] == 1, H(x))
 q.fdc_dchg = False
 x = call13(q, 0x1600, dx=0)
 check('floppy A: INT 13h 16h without a swap: not changed (AH=00)', x['ax'] >> 8 == 0 and x['cf'] == 0, H(x))
+# a CF card (IDENTIFY word 0 = 848Ah) hides the change line: report none, so DOS checks the disk itself
+for label, kw in (('CF card as master', {}),
+                  ('CF card as slave', dict(drive=(8912, 15, 63), drive_model='WDC AC24300L', slave=(16000, 16, 63),
+                                            slave_model='SanDisk SDCFB-8192',
+                                            cmos=make_cmos(drive=(8912, 15, 63), drive_d=(16000, 16, 63))))):
+    q = Post(ROM, **kw); q.run(max_ms=40000)
+    x = call13(q, 0x1500, dx=0)
+    check('%s: INT 13h 15h reports no change line for A: (AH=01)' % label, x['ax'] >> 8 == 1 and x['cf'] == 0
+          and q.mu.mem_read(0x48F, 1)[0] & 8, H(x))
 
 # ---------------------------------------------------------------- errors, schemes, mono
 bad = bytearray(b'\xff' * 128); bad[0x0F] = 0

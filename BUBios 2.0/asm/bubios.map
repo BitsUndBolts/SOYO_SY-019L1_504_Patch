@@ -12,16 +12,17 @@ Output file:  /home/claude/repo/BUBios2/asm/bubios.bin
 
 Vstart            Start             Stop              Length    Class     Name
                0                 0                 0  00000000  progbits  .text
-            DA84                 0               578  00000578  progbits  code
+            DA84                 0               57C  0000057C  progbits  code
             7902               800               DFC  000005FC  progbits  data
             7F14              1000              10EA  000000EA  progbits  code2
-            7856              1400              149E  0000009E  progbits  code3
+            7856              1400              14AA  000000AA  progbits  code3
             39C0              1800              19C3  000001C3  progbits  post1
-            3B8F              1C00              21D3  000005D3  progbits  post2
-            429D              2400              2B3A  0000073A  progbits  post3
-            3292              2C00              2DEC  000001EC  progbits  lba
+            3B8F              1C00              21D9  000005D9  progbits  post2
+            429D              2400              2B38  00000738  progbits  post3
+            3292              2C00              2DEF  000001EF  progbits  lba
             19B0              3000              30CA  000000CA  progbits  tools
-            4EAA              3200              321F  0000001F  progbits  mem
+            4EAA              3200              3228  00000028  progbits  mem
+            76AC              3300              330D  0000000D  progbits  wait
 
 -- Sections (detailed) --------------------------------------------------------
 
@@ -39,7 +40,7 @@ vfollows:  not defined
 ---- Section code -------------------------------------------------------------
 
 class:     progbits
-length:                 578
+length:                 57C
 start:                    0
 align:     not defined
 follows:   not defined
@@ -72,7 +73,7 @@ vfollows:  not defined
 ---- Section code3 ------------------------------------------------------------
 
 class:     progbits
-length:                  9E
+length:                  AA
 start:                 1400
 align:     not defined
 follows:   not defined
@@ -94,7 +95,7 @@ vfollows:  not defined
 ---- Section post2 ------------------------------------------------------------
 
 class:     progbits
-length:                 5D3
+length:                 5D9
 start:                 1C00
 align:     not defined
 follows:   not defined
@@ -105,7 +106,7 @@ vfollows:  not defined
 ---- Section post3 ------------------------------------------------------------
 
 class:     progbits
-length:                 73A
+length:                 738
 start:                 2400
 align:     not defined
 follows:   not defined
@@ -116,7 +117,7 @@ vfollows:  not defined
 ---- Section lba --------------------------------------------------------------
 
 class:     progbits
-length:                 1EC
+length:                 1EF
 start:                 2C00
 align:     not defined
 follows:   not defined
@@ -138,11 +139,22 @@ vfollows:  not defined
 ---- Section mem --------------------------------------------------------------
 
 class:     progbits
-length:                  1F
+length:                  28
 start:                 3200
 align:     not defined
 follows:   not defined
 vstart:                4EAA
+valign:    not defined
+vfollows:  not defined
+
+---- Section wait -------------------------------------------------------------
+
+class:     progbits
+length:                   D
+start:                 3300
+align:     not defined
+follows:   not defined
+vstart:                76AC
 valign:    not defined
 vfollows:  not defined
 
@@ -373,6 +385,7 @@ Real              Virtual           Name
              50D              DF91  code_end
              50D              DF91  ext48
              564              DFE8  ext48.tot
+             578              DFFC  s_low
 
 ---- Section data -------------------------------------------------------------
 
@@ -496,6 +509,7 @@ Real              Virtual           Name
             1497              78ED  dt_commit.sett
             149B              78F1  dt_commit.show
             149E              78F4  code3_end
+            149E              78F4  s_fpu387
 
 ---- Section post1 ------------------------------------------------------------
 
@@ -623,7 +637,8 @@ Real              Virtual           Name
             21BA              4149  fpu_probe.no
             21C0              414F  stat_text
             21D2              4161  stat_text.r
-            21D3              4162  post2_end
+            21D3              4162  s_video
+            21D9              4168  post2_end
 
 ---- Section post3 ------------------------------------------------------------
 
@@ -647,86 +662,85 @@ Real              Virtual           Name
             257D              441A  fill_values.rn
             258E              442B  fill_values.done
             258F              442C  bu_final
-            25D0              446D  bu_final.bc
-            25F8              4495  bu_final.t
-            260E              44AB  bu_final.notime
-            261E              44BB  bu_final.sec
-            262B              44C8  bu_final.tick
-            2649              44E6  bu_final.del
-            2656              44F3  bu_final.key
-            2660              44FD  bu_final.boot
-            2668              4505  bu_final.out
-            2677              4514  bu_final.setup
-            2695              4532  bu_final.halt
-            2698              4535  bcd_raw
-            26AD              454A  detect_disks
-            26B4              4551  detect_disks.one
-            26D4              4571  detect_disks.ask
-            2716              45B3  detect_disks.later
-            271E              45BB  detect_disks.ok
-            277C              4619  detect_disks.auto
-            2787              4624  detect_disks.x
-            278A              4627  detect_disks.r
-            278B              4628  ide_id
-            27C1              465E  ide_id.w
-            27C7              4664  ide_id.f
-            27D6              4673  ide_id.keep
-            27E1              467E  ide_id.m
-            27FB              4698  ide_id.n
-            2806              46A3  ide_id.none
-            280A              46A7  ide_id.fail
-            280C              46A9  ide_id.f2
-            280D              46AA  ide_id.end
-            2819              46B6  id_words
-            2826              46C3  measure_clock
-            2889              4726  measure_clock.k
-            28A0              473D  measure_clock.sn
-            28AF              474C  measure_clock.abs
-            28BC              4759  measure_clock.no
-            28BD              475A  schemes
-            28FC              4799  labels
-            295D              47FA  port_names
-            2979              4816  ps_title
-            299B              4838  ps_title_r
-            29BD              485A  pl_cpu
-            29C7              4864  pl_fpu
-            29D3              4870  pl_clock
-            29D9              4876  pl_cache
-            29DF              487C  pl_shadow
-            29EA              4887  pl_bios
-            29EF              488C  pl_rtc
-            29FB              4898  pl_mem
-            2A02              489F  pl_diskc
-            2A0A              48A7  pl_diskd
-            2A12              48AF  pl_ports
-            2A18              48B5  pl_roms
-            2A24              48C1  s_bioscore
-            2A3E              48DB  s_cx486dlc
-            2A4B              48E8  s_cyrix
-            2A55              48F2  s_fpu387
-            2A61              48FE  s_fpuint
-            2A69              4906  s_kb
-            2A6D              490A  s_mb
-            2A71              490E  s_type
-            2A77              4914  s_auto
-            2A7C              4919  s_lba
-            2A81              491E  s_arrow
-            2A89              4926  s_disabled
-            2A92              492F  s_video
-            2A98              4935  s_system
-            2A9F              493C  s_plus
-            2AA3              4940  s_ok
-            2AA6              4943  s_low
-            2AAA              4947  s_st_del
-            2AC1              495E  s_st_dev
-            2AD6              4973  s_st_err
-            2AEB              4988  s_st_bootc
-            2AFF              499C  s_st_boota
-            2B13              49B0  s_post
-            2B1B              49B8  s_sec
-            2B1E              49BB  auto_on
-            2B36              49D3  auto_on.off
-            2B3A              49D7  post3_end
+            25AF              444C  bu_final.ncf
+            25DC              4479  bu_final.bc
+            2604              44A1  bu_final.t
+            261A              44B7  bu_final.notime
+            262A              44C7  bu_final.sec
+            2637              44D4  bu_final.tick
+            2655              44F2  bu_final.del
+            2662              44FF  bu_final.key
+            266C              4509  bu_final.boot
+            2674              4511  bu_final.out
+            2683              4520  bu_final.setup
+            26A1              453E  bu_final.halt
+            26A4              4541  bcd_raw
+            26B9              4556  detect_disks
+            26C0              455D  detect_disks.one
+            26E0              457D  detect_disks.ask
+            2722              45BF  detect_disks.later
+            2728              45C5  detect_disks.jx
+            272A              45C7  detect_disks.ok
+            2743              45E0  detect_disks.cf
+            2748              45E5  detect_disks.ncf
+            279C              4639  detect_disks.auto
+            27A7              4644  detect_disks.x
+            27AA              4647  detect_disks.r
+            27AB              4648  ide_id
+            27E1              467E  ide_id.w
+            27E7              4684  ide_id.f
+            27F6              4693  ide_id.keep
+            2801              469E  ide_id.m
+            281B              46B8  ide_id.n
+            2826              46C3  ide_id.none
+            282A              46C7  ide_id.fail
+            282C              46C9  ide_id.f2
+            282D              46CA  ide_id.end
+            2839              46D6  id_words
+            284A              46E7  measure_clock
+            28AD              474A  measure_clock.k
+            28C4              4761  measure_clock.sn
+            28D3              4770  measure_clock.abs
+            28E0              477D  measure_clock.no
+            28E1              477E  schemes
+            2920              47BD  labels
+            2981              481E  port_names
+            299D              483A  ps_title
+            29BF              485C  ps_title_r
+            29E1              487E  pl_cpu
+            29EB              4888  pl_fpu
+            29F7              4894  pl_clock
+            29FD              489A  pl_cache
+            2A03              48A0  pl_shadow
+            2A0E              48AB  pl_bios
+            2A13              48B0  pl_rtc
+            2A1F              48BC  pl_mem
+            2A26              48C3  pl_diskc
+            2A2E              48CB  pl_diskd
+            2A36              48D3  pl_ports
+            2A3C              48D9  pl_roms
+            2A48              48E5  s_bioscore
+            2A62              48FF  s_cyrix
+            2A6C              4909  s_fpuint
+            2A74              4911  s_kb
+            2A78              4915  s_mb
+            2A7C              4919  s_type
+            2A82              491F  s_auto
+            2A87              4924  s_lba
+            2A8C              4929  s_arrow
+            2A94              4931  s_disabled
+            2A9D              493A  s_system
+            2AA4              4941  s_plus
+            2AA8              4945  s_st_del
+            2ABF              495C  s_st_dev
+            2AD4              4971  s_st_err
+            2AE9              4986  s_st_bootc
+            2AFD              499A  s_st_boota
+            2B11              49AE  s_post
+            2B19              49B6  s_sec
+            2B1C              49B9  auto_on
+            2B34              49D1  auto_on.off
+            2B38              49D5  post3_end
 
 ---- Section lba --------------------------------------------------------------
 
@@ -751,6 +765,7 @@ Real              Virtual           Name
             2DE3              3475  ext_ret.c0
             2DE4              3476  ext_ret.cf
             2DEC              347E  lba_end
+            2DEC              347E  s_ok
 
 ---- Section tools ------------------------------------------------------------
 
@@ -774,5 +789,12 @@ Real              Virtual           Name
             3200              4EAA  hd_remove
             3214              4EBE  hd_remove.c
             321E              4EC8  hd_remove.r
-            321F              4EC9  mem_end
+            321F              4EC9  cf_chgline
+            3227              4ED1  cf_chgline.r
+            3228              4ED2  mem_end
+
+---- Section wait -------------------------------------------------------------
+
+Real              Virtual           Name
+            3300              76AC  s_cx486dlc
 

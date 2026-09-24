@@ -20,13 +20,13 @@ new setup program in the style of MR BIOS:
 
 ![BUBios Summary page](BUBios/shots/1_summary.png)
 
-**[BUBios 2.1](BUBios%202.0/README.md)** (folder `BUBios 2.0/`) is the current stage. It adds:
+**[BUBios 2.1](BUBios%202.0/README.md)** (folder `BUBios 2.0/`) is the final stage, complete and confirmed on the board. It adds:
 
 - a full-screen POST display with a 3-second boot countdown
 - automatic IDE detection
 - the INT 13h extensions (LBA, up to 128 GB)
 
-It has run on the board with drives of up to 80 GB and with Windows 95 B.
+It runs on the board with drives of up to 80 GB, CF cards, 64 MB RAM and Windows 95 B.
 
 > This repository contains only the final version of the patch (v5).
 > Earlier development versions were omitted for clarity; the bug history
@@ -60,9 +60,9 @@ py/
   verify_model.py                  translation math in plain Python
   analyze_bios.py                  reproduces the ROM-structure facts
 
-BUBios 2.0/                        stage 3 (current): BUBios 2.1 — POST screen, countdown,
+BUBios 2.0/                        stage 3 (final): BUBios 2.1 — POST screen, countdown,
                                    auto-detect, LBA; own README/CHANGELOG, build, tests, tools
-  binary/BUBIOS2_SY019L1.BIN       ECHS + BUBios 2.1 (MD5 in BUBios 2.0/CHANGELOG.md)
+  binary/BUBIOS2_SY019L1.BIN       ECHS + BUBios 2.1   MD5 b975393064d7b8a387dd7bf6e5d32286
 
 BUBios/                            stage 2: the MR-BIOS-style setup UI
   README.md, CHANGELOG.md          what it does, how it works, version history

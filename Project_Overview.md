@@ -9,9 +9,9 @@
 - `BIOS_Evaluation.md` — root-cause analysis and the full bug history
 - `CHANGELOG.md` — version history of the ECHS patch (v1 → v5)
 - `BUBios/README.md` — stage 2: the BUBios setup UI built on top of the patch
-- `BUBios 2.0/README.md` — stage 3, **current work**: BUBios 2.1 (POST screen,
-  boot countdown, disk auto-detect, LBA / INT 13h extensions). Its section
-  *Status and open items* is the place to pick up from.
+- `BUBios 2.0/README.md` — stage 3: BUBios 2.1 (POST screen, boot countdown,
+  disk auto-detect, LBA / INT 13h extensions), complete and confirmed on the
+  board. Its section *Status* is the place to pick up from.
 
 > **Final version only.** The patch went through five versions (v1 → v5)
 > during development. This repository contains **only the final, hardware-
@@ -124,7 +124,7 @@ geometry), and lets you type the date and time as numbers. The disk code
 is unchanged. `BUBios/binary/BUBIOS_SY019L1.BIN` is the ROM to program
 if you want both. See `BUBios/README.md`.
 
-## 8. Stage 3 — BUBios 2.x (current)
+## 8. Stage 3 — BUBios 2.x (complete)
 
 `BUBios 2.0/` holds BUBios 2.1. It is built from the ECHS ROM plus the
 BUBios setup and adds:
@@ -147,18 +147,19 @@ of the 64 KB ROM are left.
   - a 4 GB slave (ECHS)
   - Windows 95 B installed
   - the countdown, auto-detect and setup visits
-- **Waiting for a board test:** the sixth build.
-  - Fixed in it: a drive set up in BIOS but not connected no longer stalls
-    POST (it is dropped from CMOS), and the status line shows "Entering
-    Setup" once DEL is seen.
-  - Also to confirm: the fifth build's fix for the occasional hang at the
-    video sign-on after power-on/RESET (an early STI).
-- **Floppy change line under MS-DOS:** it fails whenever a CF card is on the
-  IDE bus. The card drives bit 7 of port 3F7h; hard disks don't, and the BIOS
-  code is unchanged. Workaround to test: `DRIVPARM=/D:0 /F:7` in CONFIG.SYS.
-  See `BUBios 2.0/README.md`.
-- **How to continue:**
-  1. Read `BUBios 2.0/README.md`, section *Status and open items*.
+- **Status: complete.** The seventh build (release) is confirmed on the
+  board. All reported bugs are closed:
+  - a hang at the video sign-on after power-on or RESET
+  - setup visits before and during the countdown
+  - 64 MB memory display
+  - unplugged drives stalling POST
+  - "Entering Setup" feedback after DEL
+  - floppy swaps not noticed under MS-DOS while a CF card is on the IDE bus
+    (the card hides the change line; the BIOS now reports "no change line"
+    so DOS checks the disk itself)
+- **ROM space:** practically full (about 10 bytes left).
+- **If you continue:**
+  1. Read `BUBios 2.0/README.md`, section *Status*.
   2. Build with `python3 py/build_bubios.py`, run from `BUBios 2.0/`.
   3. Test with `py/test_bubios.py`, `py/test_post.py` (POST emulator) and
      `py/regress_echs.py`.

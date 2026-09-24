@@ -2,12 +2,12 @@
 
 BUBios 2.x adds a new **POST screen** to the BUBios setup and removes dead AMI code from the ROM to make room for it. Version 2.1 is based on the test of 2.0 on the real board. It adds a boot countdown with DEL for setup, automatic hard disk detection and LBA access through the INT 13h extensions. Everything from BUBios 1.0 (the MR-BIOS-style setup) and from the parent project (ECHS large-disk support up to 8.4 GB) is still there and unchanged.
 
-**Status:** version 2.1, sixth build. Earlier builds ran on the real board with 64 MB, a 20 GB master and an 80 GB disk (auto-detect, LBA), 16 GB and 4 GB CF cards, and Windows 95 B installed. The sixth build drops drives that are set up but not connected, and shows *Entering Setup* once DEL is seen. It is verified in the emulators and 86Box, but has not yet run on the real board. This BIOS generation has no recovery block, so keep the 2.0 chip, the 1.0 chip or the original dump before programming an EPROM.
+**Status: complete, and confirmed on the real board.** Version 2.1, seventh build, the release. Tested with 16 and 64 MB, a 20 GB master and an 80 GB disk (auto-detect, LBA), 4 GB and 16 GB CF cards, and Windows 95 B / MS-DOS 7.1. Everything in this README runs on the board: the POST screen, the countdown and DEL, auto-detect, LBA, dropping unplugged drives, and the floppy fix with CF cards. This BIOS generation has no recovery block, so keep the 2.0 chip, the 1.0 chip or the original dump before programming an EPROM.
 
 | | |
 |---|---|
 | ROM image | `binary/BUBIOS2_SY019L1.BIN` (64 KB, 27C512) |
-| MD5 | `db32ec060dba87c8ff9d6cb162ce5d72` |
+| MD5 | `b975393064d7b8a387dd7bf6e5d32286` |
 | Built from | `binary/base/SY019L1_27C512_CHSPATCH.BIN` (ECHS v5, MD5 `8e520e91100f932d3f054883b08d37da`) |
 | Setup | BUBios 1.0 setup, version 2.1, one new Tools entry |
 
@@ -25,7 +25,7 @@ The 2.0 test on the board brought up these points. This is what 2.1 does about e
 | Fill in the fields early, and pause before the boot | Everything that can be known before the memory test is shown with the first screen: floppies, disk names and geometry, serial and parallel ports, option ROMs, shadow RAM, battery, and the clock when the early reading is valid. What cannot be known yet (the cache, which AMI sets up last) shows `...` until it is. After POST, a 3-second countdown runs before the boot (see below). |
 | Remove the BUBios text at the bottom right | Removed. The BIOS ID string is on the right of the status bar, ending one column from the edge like the title bar. |
 | Why does POST crash without "(C) American Megatrends Inc.," on screen? | This is AMI's copyright check, not an error check. It is now switched off, and the line is gone (see below). |
-| HDD auto-detect and/or LBA, if there is room | Both are in (see below). About 45 bytes are left in the ROM. |
+| HDD auto-detect and/or LBA, if there is room | Both are in (see below). About 10 bytes are left in the ROM. |
 
 ### The boot countdown
 
@@ -166,7 +166,9 @@ The dead code was found in three steps:
 
 The build script checks the MD5 of every removed range before clearing it, and of every kept neighbour after patching.
 
-**Space left after 2.1:** about 45 bytes, spread over small gaps. The build prints the exact numbers. The largest are 12 B (`7856` block) and 9 B (`mem` block at 4EAAh, the 40 bytes of AMI's old memory-count print that are jumped over).
+**Space left after 2.1:** about 10 bytes. Beyond the dead code above, two more pieces of AMI space were reclaimed:
+- the 40 bytes of AMI's old memory-count print that are jumped over (`section mem`, 4EAAh)
+- AMI's unused "WAIT......" text (`section wait`, 76ACh, 13 bytes)
 
 ## How it works (short version)
 
@@ -177,13 +179,14 @@ AMI's POST prints through a handful of routines. BUBios replaces those prints or
 | `593B`, `12BF` | logo line `AMIBIOS (C)1992 …` | nothing |
 | `5945`, `12C6` | `CALL F42E` (BIOS ID lines) | `bu_post_init`: leaves the video BIOS sign-on up for 2 s, calls F42E (it also sets the A20 gate), draws the screen and identifies the disks (and sets them up if auto-detect is on) |
 | `4F04` | "Hit <DEL>, If you want to run SETUP" | `bu_delmsg`: status line |
-| `4EA1` | memory count `nnnnnn KB OK` | `bu_memshow`: bar and count |
+| `4EA1` | memory count `nnnnnn KB OK` | `bu_memshow`: bar and count (the 40 bytes jumped over, 4EAA-4ED1, now hold code) |
 | `4CB4`, `12CD` | `WAIT......` | `bu_wait`: status line; identifies drives that were not ready yet (up to 10 s with auto-detect) |
 | `120D`, `158C` | AMI's error list | `bu_errors`: clears the message rows, then AMI's list |
 | `1610` | end-of-POST beep | `bu_chime` |
 | `1613` | clear screen before the configuration box | `bu_refresh`: only if the POST screen is not intact (after setup), the mode is reset and the screen redrawn |
 | `164C` | configuration box | `bu_final`: clock, cache, ports, boot order, POST time, countdown, then a clean screen for DOS |
 | `A3E7` | INT 13h entry | `bu_int13`: AH 41h-48h for hard disks go to the extensions, everything else to AMI/ECHS as before |
+| `C6E4` | INT 13h AH=15h (floppy): `CALL D385` (stub, "change line usable") | `cf_chgline`: "no" when a CF card is on the IDE bus |
 | `F3DB` | copyright check | RET |
 
 Notes for anyone changing this code:
@@ -202,7 +205,7 @@ Run these from this folder. You need NASM, Python 3 and `pip install unicorn pil
 ```
 python3 py/build_bubios.py     # builds binary/BUBIOS2_SY019L1.BIN from binary/base/
 python3 py/test_bubios.py      # 74 checks of the setup
-python3 py/test_post.py        # 92 checks of POST, countdown, setup visits, auto-detect, LBA, floppy change line (25-35 minutes)
+python3 py/test_post.py        # 94 checks of POST, countdown, setup visits, auto-detect, LBA, floppy change line (25-35 minutes)
 python3 py/regress_echs.py     # ECHS INT 13h regression + INT 19h boot test
 python3 py/shots.py            # setup screenshots into shots/
 ```
@@ -234,7 +237,7 @@ python3 py/shots.py            # setup screenshots into shots/
 
   ![LBA boot sector test](shots/post_7_lba_test.png)
 
-## Floppy disk change in MS-DOS: caused by CF cards
+## Floppy disk change in MS-DOS: CF cards hide it
 
 **Symptom (on the board, MS-DOS 7.1):** after a floppy swap, `DIR A:` still lists the old disk. It happens with a TEAC drive and a GoTek. Taking the disk out (a read error) or Ctrl+C makes DOS read it again.
 
@@ -258,36 +261,45 @@ It is not a BUBios fault:
 - AMI's floppy code is byte-identical in the original, ECHS and BUBios ROMs (INT 40h handler at `EC59`; FDC routines at `8878`, `89FC`, `940C-97D4`, `C5F2`).
 - In the emulator, INT 13h 15h/16h answer exactly like the original ROM. `test_post.py` checks them.
 
-**Workaround in DOS:** tell DOS that drive A: has no change line. It then checks the disk itself: after 2 seconds without access, it reads the boot sector again and compares the volume serial number. Add this to CONFIG.SYS:
+**What BUBios does: no change line while a CF card is present** (confirmed on the board: the directory updates after a swap).
+- At POST, BUBios recognises a CompactFlash card from its IDENTIFY data: word 83 bit 2 (CFA feature set) or word 0 = 848Ah.
+- At the end of POST it sets a flag (bit 3 of 40:8Fh, a bit AMI never uses).
+- AMI's INT 13h AH=15h asks a stub routine (`D385`, STC/RET) whether a floppy's change line can be used. BUBios points that call at `cf_chgline`, which answers "no" when the flag is set, so AH=15h returns AH=01 (drive without change line).
+- DOS then does what it always did for drives without a change line: after 2 seconds without access it reads the boot sector again and compares the volume serial number, so a swapped disk is noticed.
+- With hard disks only, nothing changes (AH=02; the fast change line is used).
+- **Limits:**
+  - Two disks with the same serial number (copies of one image) still look alike to DOS.
+  - A CF card that is neither set up nor found by auto-detect is not asked for IDENTIFY, so it is not recognised.
+  - A card that reports neither signature is not recognised either.
+  - In both cases, add `DRIVPARM=/D:0 /F:7` to CONFIG.SYS. It does the same by hand: `/F:7` means a 1.44 MB drive, and the missing `/C` means "no change line".
+- Selecting a different IDE device before reading 3F7h does not help: the S key in `DSKCHG` never made the line appear.
 
-```
-DRIVPARM=/D:0 /F:7
-```
-
-`/F:7` means a 1.44 MB drive, and the missing `/C` means "no change line". Two disks with the same serial number (for example copies of one image) still look alike.
-
-**Possible BIOS workaround, not built:**
-- BUBios could answer INT 13h AH=15h for floppies with "no change line" (AH=01) whenever a CF card was found at POST.
-- A CF card is recognised by IDENTIFY word 0 = 848Ah, but not every card reports that.
-- That is the same as the DRIVPARM line, but automatic. Only worth building if the DRIVPARM test works.
-- Selecting a different IDE device before the read does not help: the S key in `DSKCHG` never made the line appear.
+**Why not simply answer "changed" every time?**
+- DOS would throw away its cached FAT and directory on every access. Worse, a disk it thinks was swapped while it still has unwritten buffers for it leads to *Invalid disk change* errors, or lost data, in the middle of a copy.
+- "No change line" is the mode DOS was built for (the 360 KB drives of the PC and XT had no change line). DOS then decides itself when to look again, and it never does so while it has data to write.
 
 **`tools/DSKCHG.COM`** (source `tools/dskchg.asm`, 408 bytes, runs under DOS):
 - It shows INT 13h 15h/16h, the raw 3F7h byte and its bit 7 several times a second.
 - Keys **M**, **S** and **N** select the IDE master, the IDE slave or neither before the read.
 - **Esc** quits.
 
-## Status and open items
+## Status
 
-For the next session:
+The project is complete. All reported bugs are closed and confirmed on the board with the seventh build:
+- no hang at the video sign-on after power-on or RESET
+- 64 MB total in setup, and the memory bar
+- setup visits before and during the countdown
+- unplugged drives are dropped without stalling
+- *Entering Setup* after DEL
+- floppy swaps noticed with a CF card attached
 
-- **Sixth build** (MD5 in the table at the top) is not yet confirmed on the board. It adds:
-  - dropping a drive that is set up but not connected
-  - *Entering Setup* on the status line once DEL is seen
-- **Fifth build fix, to confirm:** no hangs at the video sign-on after power-on or RESET (interrupts stay off in early POST). The coprocessor now appears at the end of POST.
-- **Floppy change line with CF cards:** the cause is found (see above). Next step: test `DRIVPARM=/D:0 /F:7` in CONFIG.SYS. If it helps, an automatic BIOS version (AH=15h → "no change line" when a CF card is present) could be added if space allows.
-- **Space:** about 45 bytes are left in the ROM, spread over small gaps; `py/build_bubios.py` prints them. Code can live in any block, including `section data` (7902h), `section code2` (7F14h) and `section mem` (4EAAh, inside AMI's old memory-count print).
+**If you pick this up again:**
+- **Space:** the ROM is practically full (about 10 bytes left in small gaps; `py/build_bubios.py` prints them). New features need space reclaimed first. Candidates: AMI texts that are no longer printed; check every reference, including `push imm16`.
 - **Testing:** `py/test_post.py` takes 25-35 minutes. Stop any stray 86Box processes first; they slow it down a lot.
+- **Traps:** these rules are in *How it works*:
+  - interrupts are off in early POST
+  - absent drives are only final after the memory test
+  - AMI's DEL flag lives in CMOS 0Eh bit 0
 
 ## Known limits
 

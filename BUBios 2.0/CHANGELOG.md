@@ -1,8 +1,28 @@
 # BUBios changelog
 
+## 2.1, seventh build (release) — 2026-09-25
+
+ROM `binary/BUBIOS2_SY019L1.BIN`, MD5 `b975393064d7b8a387dd7bf6e5d32286`
+
+**Confirmed on the board**:
+- the floppy directory updates after a swap with a CF card attached
+- unplugged drives are dropped from setup without stalling POST
+- *Entering Setup* appears after DEL
+
+All reported bugs are closed.
+
+- **Floppy swaps noticed with a CF card on the IDE bus.** A CF card drives bit 7 of port 3F7h and hides the floppy change line, so MS-DOS kept showing the old directory.
+  - BUBios recognises a CF card from IDENTIFY (word 83 bit 2, or word 0 = 848Ah). `ide_id` now also keeps words 83 and 0.
+  - At the end of POST it sets bit 3 of 40:8Fh.
+  - INT 13h AH=15h for floppies then reports "no change line" (AH=01): AMI's call to its stub at D385 now goes to `cf_chgline`. DOS falls back to its own check (volume serial after 2 s).
+  - Hard disks only: unchanged.
+- **Confirmed on the board:** no more hangs at the video sign-on (fifth build fix).
+- **Room:** AMI's unused "WAIT......" text at 76AC (13 bytes) is a new block (`section wait`); some strings moved. About 10 bytes are left.
+- `test_post.py`: 94 checks. It now also checks change-line reporting with a hard disk, a CF master and a CF slave.
+
 ## 2.1, sixth build — 2026-09-24
 
-ROM `binary/BUBIOS2_SY019L1.BIN`, MD5 `db32ec060dba87c8ff9d6cb162ce5d72`
+ROM MD5 `db32ec060dba87c8ff9d6cb162ce5d72` (replaced by the seventh build)
 
 - **A drive set up in BIOS but not connected no longer stalls POST.** AMI waited about a minute at checkpoint 91h for it, then stopped with *HDD controller failure / Press F1*. On the board this looked like a freeze at *Checking devices*.
   - When nothing answers on the IDE bus for that drive after the memory test, BUBios now sets its CMOS type to "not installed" and fixes the checksum. This happens with auto-detect on or off, before AMI's disk setup.

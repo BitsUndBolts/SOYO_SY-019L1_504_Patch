@@ -66,7 +66,7 @@ ST_UNITS   equ 0xF6       ; word: 64 KB blocks counted so far
 ST_TOTAL   equ 0xF8       ; word: 64 KB blocks in total (0 = unknown)
 ST_STAT    equ 0xFA       ; word: status line text
 ST_MHZ     equ 0xFC       ; word: measured clock x10 (0 = not shown yet)
-ST_DISK    equ 0xFE       ; bit0/1: C:/D: identified, bit4/5: C:/D: absent
+ST_DISK    equ 0xFE       ; bit0/1: C:/D: identified, bit4/5: C:/D: absent, bit6: a CF card
 ST_MISC    equ 0xFF       ; bit0: POST time not meaningful (SETUP visited), bit1: end of POST
                           ; bit1: memory test done (say 'Disabled' for cache)
 
@@ -1142,6 +1142,7 @@ stat_text:
     mov  si, s_st_setup
 .r: ret
 
+s_video:    db "Video", 0
 post2_end:
 
 ; =====================================================================
@@ -1336,6 +1337,10 @@ bu_final:
     jne  .out
     or   byte [ST_MISC], 2
     call fpu_probe
+    test byte [ST_DISK], 0x40      ; a CF card drives bit 7 of port 3F7h:
+    jz   .ncf                      ; tell INT 13h AH=15h (cf_chgline) that
+    or   byte [0x8F], 8            ; floppies have no usable change line
+.ncf:
     call vid_es
     call cmos_ext                  ; memory: as found by POST (CMOS 31h:30h)
     mov  [ST_UNITS], ax
@@ -1504,7 +1509,7 @@ detect_disks:
     call goto
     call value_attr
     pop  cx
-    sub  sp, 12
+    sub  sp, 16
     mov  si, sp
     call ide_id
     jnc  .ok
@@ -1518,16 +1523,22 @@ detect_disks:
     or   [ST_DISK], al
     call hd_remove
     call draw_disk                 ; "None"
-    jmp  short .x
+    jmp  short .jx
 .later:                            ; no answer yet: "..." (asked again
     mov  si, s_dots + 3            ; after the memory test)
     call dots_or
-    jmp  short .x
+.jx:jmp  .x
 .ok:
     mov  al, 1
     mov  cl, bl
     shl  al, cl
     or   [ST_DISK], al
+    test byte [ss:si+12], 4        ; a CompactFlash card? (word 83 bit 2:
+    jnz  .cf                       ; CFA feature set, or word 0 = 848Ah)
+    cmp  word [ss:si+14], 0x848A
+    jne  .ncf
+.cf:or   byte [ST_DISK], 0x40      ; (it hides the floppy change line)
+.ncf:
     ; LBA size, if the drive has LBA and it is more than CHS reaches
     test byte [ss:si+7], 2         ; word 49 bit 9
     jz   .auto
@@ -1563,7 +1574,7 @@ detect_disks:
     jz   .x
     call auto_set
     call draw_disk                 ; redraw the geometry row
-.x: add  sp, 12
+.x: add  sp, 16
 .r: ret
 
 ; ide_id -- IDENTIFY DEVICE by polling (no IRQ, no buffer)
@@ -1654,7 +1665,9 @@ ide_id:
     popf
     pop  dx
     ret
-id_words: db 1, 0,  3, 2,  6, 4,  49, 6,  60, 8,  61, 10,  0xFF
+id_words: db 1, 0,  3, 2,  6, 4,  49, 6,  60, 8,  61, 10,  83, 12,  0, 14,  0xFF
+; (16 bytes: detect_disks has room for them; ext48's 12-byte buffer at
+;  [bp-20] then runs into [bp-8]/[bp-6], which 48h no longer needs)
 
 ; ---------------------------------------------------------------------
 ; measure_clock -> [ST_MHZ] (MHz x 10): a timing loop of 32 DIVs per
@@ -1794,9 +1807,7 @@ pl_diskd:   db "Disk D:", 0
 pl_ports:   db "Ports", 0
 pl_roms:    db "Option ROMs", 0
 s_bioscore: db "AMI 11/11/92 ", 0xFE, " BUBios 2.1", 0
-s_cx486dlc: db "Cyrix 486DLC", 0
 s_cyrix:    db "Cyrix 486", 0
-s_fpu387:   db "387 present", 0
 s_fpuint:   db "On-chip", 0
 s_kb:       db " KB", 0
 s_mb:       db " MB", 0
@@ -1805,11 +1816,8 @@ s_auto:     db "Auto", 0
 s_lba:      db "LBA ", 0
 s_arrow:    db " ", 0x1A, " DOS ", 0
 s_disabled: db "Disabled", 0
-s_video:    db "Video", 0
 s_system:   db "System", 0
 s_plus:     db " + ", 0
-s_ok:       db "OK", 0
-s_low:      db "Low", 0
 s_st_del:   db "Press DEL to run Setup", 0
 s_st_dev:   db "Checking devices ...", 0
 s_st_err:   db "POST found a problem", 0
@@ -2230,4 +2238,35 @@ hd_remove:
     call P_CMOSWR
     jmp  cmos_csum
 .r: ret
+; cf_chgline -- replaces AMI's stub (STC/RET at D385) called by INT 13h
+; AH=15h for a floppy: CF=1 = the drive has a change line. With a CF card
+; on the IDE bus (40:8F bit 3, set by bu_final; AMI never sets that bit)
+; the line cannot be read, so DOS is told there is none and checks the
+; disk itself. DS = 40h.
+cf_chgline:
+    test byte [0x8F], 8
+    jnz  .r                        ; (TEST clears CF)
+    stc
+.r: ret
 mem_end:
+
+; ---------------------------------------------------------------------
+section code3
+; ---------------------------------------------------------------------
+s_fpu387:   db "387 present", 0
+
+; ---------------------------------------------------------------------
+section code
+; ---------------------------------------------------------------------
+s_low:      db "Low", 0
+
+; ---------------------------------------------------------------------
+section lba
+; ---------------------------------------------------------------------
+s_ok:       db "OK", 0
+
+; ---------------------------------------------------------------------
+; AMI's "WAIT......" text (76AC-76B8), unused since 2.0
+section wait start=0x3300 vstart=0x76AC
+; ---------------------------------------------------------------------
+s_cx486dlc: db "Cyrix 486DLC", 0

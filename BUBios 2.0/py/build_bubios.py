@@ -158,6 +158,15 @@ new = bytes.fromhex('8bc303c5') + call(0x4EA5, 'bu_memshow') + b'\xeb' + bytes([
 patch(0x4EA1, old, new + NOP * (len(old) - len(new) - 0) , 'memory count -> bu_memshow')
 # 2.1: the 40 bytes jumped over (4EAA-4ED1) hold code (section mem)
 MEM_BLK = (0x4EAA, 0x4ED2)
+# 2.1: AMI's "WAIT......" text (76AC-76B8), unused since the 2.0 hooks at
+# 12CD/4CB4: 13 bytes for section wait
+WAIT_BLK = (0x76AC, 0x76B9)
+if bytes(rom[WAIT_BLK[0]:WAIT_BLK[1]]) != b'WAIT......\r\n\x00': die('WAIT text not at 76AC')
+rom[WAIT_BLK[0]:WAIT_BLK[1]] = bytes(WAIT_BLK[1] - WAIT_BLK[0])
+v, st, ln = sec['wait']
+assert v == WAIT_BLK[0]
+if v + ln > WAIT_BLK[1]: die('wait block overflow (%d bytes too long)' % (v + ln - WAIT_BLK[1]))
+rom[v:v + ln] = blob[st:st + ln]
 v, st, ln = sec['mem']
 assert v == MEM_BLK[0]
 if v + ln > MEM_BLK[1]: die('mem block overflow (%d bytes too long)' % (v + ln - MEM_BLK[1]))
@@ -172,6 +181,9 @@ patch(0x158C, bytes.fromhex('e8c700'), call(0x158C, 'bu_errors'), 'error list ->
 patch(0xF3DB, bytes.fromhex('60b40332ff'), b'\xc3', 'copyright screen check -> RET')
 # 2.1: INT 13h entry -> bu_int13 (extensions AH=41h-48h, then AMI's code)
 patch(0xA3E7, bytes.fromhex('80fa80fbfc'), b'\xe9' + rel16(0xA3E7, sym['bu_int13']) + NOP * 2, 'INT 13h -> bu_int13')
+# 2.1: INT 13h AH=15h (floppy) asks the stub at D385 (STC/RET) whether the
+# change line can be used: cf_chgline says no when a CF card is on the IDE bus
+patch(0xC6E4, b'\xe8' + rel16(0xC6E4, 0xD385), b'\xe8' + rel16(0xC6E4, sym['cf_chgline']), 'floppy change line -> cf_chgline')
 # the old main-menu handler table still names the Hard Disk Utility: point
 # that entry at a RET (end of the error dialog routine) instead of freed space
 assert rom[0x4A43] == 0xC3
@@ -230,6 +242,8 @@ title = cstr(sym['s_title'])
 for name, (lo, hi) in BLOCKS:
     v, st, ln = sec[name]
     print('%-5s %04X-%04X  %4d bytes (%d free)' % (name, v, v + ln - 1, ln, hi - v - ln))
+v, st, ln = sec['wait']
+print('%-5s %04X-%04X  %4d bytes (%d free)' % ('wait', v, v + ln - 1, ln, WAIT_BLK[1] - v - ln))
 v, st, ln = sec['mem']
 print('%-5s %04X-%04X  %4d bytes (%d free)' % ('mem', v, v + ln - 1, ln, MEM_BLK[1] - v - ln))
 print('title %d chars' % len(title))
