@@ -1,8 +1,20 @@
 # BUBios changelog
 
+## 2.1, third build — 2026-09-24
+
+ROM `binary/BUBIOS2_SY019L1.BIN`, MD5 `7cb6cd433fc576ce2dc9781210522f6c`
+
+The second build ran on the real board: a 20 GB master was auto-detected and used through LBA, a 4 GB slave through ECHS, and Windows 95 B installed. Visiting setup brought up these bugs, now fixed:
+
+- **Drive names missing after setup entered during POST** (DEL before the chime). POST carries on after AMI's setup and BUBios redraws the screen, but it still thought the drives had been asked already. The drives are now asked again when setup returns. This also means switching auto-detect on in that setup finds the drives in the same POST.
+- **Switching auto-detect on from the countdown setup had no effect.** The switch is stored in CMOS 7Eh/7Fh, outside AMI's checksums, so "nothing changed" and there was no restart. The switch is now part of the comparison.
+- **Settings in CMOS 10h-2Dh changed from the countdown setup did not restart POST.** This covers drive types, floppies, cache and memory. The before/after comparison lost the first checksum (2Eh/2Fh) because a register was overwritten. Only changes that also moved the second checksum (34h-6Eh) restarted POST. Found while testing the fix above.
+- **DEL pressed just after AMI's own DEL check was lost or booted at once.** AMI looks for DEL only during the memory test and sets a flag in CMOS 0Eh bit 0. A DEL pressed after that check, but before the countdown, was ignored. On the board it could also reach the countdown as "any other key" and boot at once. The countdown now also checks AMI's flag, and clears it, so DEL at any time from the memory test to the end of the countdown opens setup. Found while testing the fixes above in 86Box.
+- `test_post.py`: six new checks for setup visits (83 in total).
+
 ## 2.1, second build — 2026-09-24
 
-ROM `binary/BUBIOS2_SY019L1.BIN`, MD5 `ef2babff61e23b201d0543b558b5fac2`
+ROM MD5 `ef2babff61e23b201d0543b558b5fac2` (replaced by the third build)
 
 After the first 2.1 build ran on the real board (countdown, auto-detect, errors and boot all fine):
 

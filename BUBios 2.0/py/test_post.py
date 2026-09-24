@@ -254,6 +254,59 @@ check('08h: DOS geometry unchanged (1002/255/63)', x['cx'] == 0xE9FF and x['dx']
 q, r, t2, _ = boot(lba=30_000_000)
 check('LBA capacity shown when larger than CHS', 'LBA 14648 MB' in rows(t2)[R_C], rows(t2)[R_C])
 
+# ---------------------------------------------------------------- SETUP during POST or from the countdown
+def keys_at(q, seq, t, gap=900):
+    for i, sc in enumerate(seq): q.type_key(sc, at_ms=t + i * gap)
+QUIT = [0x01, 0x01, 0x50, 0x1C, 0x15, 0x1C]      # Esc (Summary), Esc (Exit page), Down, Enter: exit without saving, Y, Enter
+TOOLS_AUTO = [0x0F] * 4 + [0x50] * 4 + [0x1C]     # Tab x4 (Tools), Down x4, Enter: switch auto-detect
+def setup_then(q, seq):
+    st = {}
+    def u(z):
+        if 'BUBios (tm)' in z.text() and 't' not in st:
+            st['t'] = z.t / 1e6; keys_at(z, seq, st['t'] + 1500)
+        if COUNTDOWN in z.text(): st['final'] = z.text()
+        return False
+    r = q.run(max_ms=90000, until=u)
+    return r, rows(st.get('final', ''))
+q = Post(ROM, drive=(16000, 16, 63), slave=(8912, 15, 63)); q.type_key(0x53, at_ms=4000)
+r, tt = setup_then(q, QUIT[1:])                  # SETUP opens on the Summary page: one Esc
+check('DEL during the memory test, quit SETUP: drive names shown again', r == 'int19' and 'SanDisk SDCFB-8192' in tt[R_C]
+      and 'WDC AC24300L' in tt[R_D] and '16000/16/63' in tt[R_CGEO], '\n'.join(tt[R_C:R_DGEO + 1]))
+q = Post(ROM, cmos=make_cmos(drive=None), drive=(16000, 16, 63)); q.type_key(0x53, at_ms=4000)
+r, tt = setup_then(q, TOOLS_AUTO + QUIT)
+check('DEL during the memory test, auto-detect switched on: drive found in the same POST',
+      r == 'int19' and 'Auto' in tt[R_CGEO] and q.mu.mem_read(0x475, 1)[0] == 1 and cold_starts(q) == 1,
+      ('\n'.join(tt[R_C:R_DGEO + 1]), q.mu.mem_read(0x475, 1)[0], cold_starts(q)))
+q = Post(ROM, cmos=make_cmos(drive=None), drive=(16000, 16, 63))
+q.run(max_ms=40000, until=lambda z: COUNTDOWN in z.text())
+keys_at(q, [0x53], q.t / 1e6 + 300); keys_at(q, TOOLS_AUTO + QUIT, q.t / 1e6 + 2500)
+r = q.run(max_ms=90000)
+check('countdown DEL, auto-detect switched on, quit: POST restarts and finds the drive',
+      r == 'int19' and cold_starts(q) == 2 and q.mu.mem_read(0x475, 1)[0] == 1 and q.cmos[0x12] == 0xF0,
+      (r, cold_starts(q), q.mu.mem_read(0x475, 1)[0], hex(q.cmos[0x12])))
+def cache_toggle(cmos):
+    q = Post(ROM, cmos=cmos)
+    q.run(max_ms=40000, until=lambda z: COUNTDOWN in z.text())
+    keys_at(q, [0x53], q.t / 1e6 + 300)
+    keys_at(q, [0x0F, 0x0F] + [0x50] * 12 + [0x51, 0x01, 0x44, 0x15, 0x1C], q.t / 1e6 + 2500)   # Advanced: External Cache, Esc, F10 Y Enter
+    c0 = bytes(q.cmos)
+    return q, q.run(max_ms=90000), c0
+q, r, c0 = cache_toggle(None)                    # first save: SETUP also tidies bytes in 34h-6Eh
+q, r, c0 = cache_toggle(bytes(q.cmos))          # second save: only 2Dh (checksum 2Eh/2Fh) changes
+check('countdown DEL, only a setting in 10h-2Dh changed (checksum 2Eh/2Fh): POST restarts',
+      r == 'int19' and cold_starts(q) == 2 and (q.cmos[0x2D] ^ c0[0x2D]) == 0x08 and q.cmos[0x3E:0x40] == c0[0x3E:0x40],
+      (r, cold_starts(q), hex(c0[0x2D]), hex(q.cmos[0x2D]), bytes(q.cmos[0x3E:0x40]).hex(), bytes(c0[0x3E:0x40]).hex()))
+
+q = Post(ROM)                                     # DEL after AMI's own check (checkpoint 89h), before the countdown
+q.run(max_ms=40000, until=lambda z: any(c == 0x90 for c, _ in z.p80[-4:]))
+q.type_key(0x53)
+r = q.run(max_ms=16000, until=lambda z: 'BUBios (tm)' in z.text())
+check('DEL pressed between AMI\'s DEL check and the countdown: SETUP still runs', r == 'until', r)
+q = Post(ROM); q.type_key(0x53, at_ms=4000)
+r, tt = setup_then(q, QUIT[1:])
+check('after AMI\'s own SETUP visit the countdown does not open SETUP again', r == 'int19' and q.cmos[0x0E] & 1 == 0
+      and COUNTDOWN in '\n'.join(tt), (r, hex(q.cmos[0x0E])))
+
 # ---------------------------------------------------------------- errors, schemes, mono
 bad = bytearray(b'\xff' * 128); bad[0x0F] = 0
 q = Post(ROM, cmos=bad, drive=None); r = q.run(max_ms=15000)

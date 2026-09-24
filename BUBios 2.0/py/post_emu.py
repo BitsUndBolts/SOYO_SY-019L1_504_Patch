@@ -176,7 +176,7 @@ class Post:
         s.cidx = 0
         s.opti = bytearray(256); s.oidx = 0
         s.cyrix = bytearray(256)
-        s.p80 = []                 # POST checkpoints
+        s.p80 = []; s.p80t = []     # POST checkpoints (and when)
         s.t = 0                    # virtual ns
         # PIC
         s.pic = [dict(imr=0xFF, irr=0, isr=0, base=8, icw=0, read_isr=False, init=0) for _ in range(2)]
@@ -393,7 +393,7 @@ class Post:
     def outb(s, port, v):
         if port in s.lpt: s.lpt[port] = v
         if port == 0x80:
-            s.p80.append((v, s.where_ip())); s.page[0] = v; return
+            s.p80.append((v, s.where_ip())); s.p80t.append(s.t); s.page[0] = v; return
         if port == 0x70: s.cidx = v & 0x7F; return
         if port == 0x71: s.cmos[s.cidx & 0x7F] = v; return
         if port == 0x64: s.kbc_cmd(v); return

@@ -2,12 +2,12 @@
 
 BUBios 2.x adds a new **POST screen** to the BUBios setup and removes dead AMI code from the ROM to make room for it. Version 2.1 is based on the test of 2.0 on the real board. It adds a boot countdown with DEL for setup, automatic hard disk detection and LBA access through the INT 13h extensions. Everything from BUBios 1.0 (the MR-BIOS-style setup) and from the parent project (ECHS large-disk support up to 8.4 GB) is still there and unchanged.
 
-**Status:** version 2.1 (second build, 2.1b). The first 2.1 build ran on the real board: countdown, auto-detect, error display and boot all work. The second build fills in more fields before the memory test and is verified in both emulators, but has not yet run on the real board. This BIOS generation has no recovery block, so keep the 2.0 chip, the 1.0 chip or the original dump before programming an EPROM.
+**Status:** version 2.1, third build. The second build ran on the real board with a 20 GB master (auto-detect, LBA) and a 4 GB slave (ECHS), and Windows 95 B installed. The third build fixes the setup-visit bugs found there. It is verified in the emulators, but has not yet run on the real board. This BIOS generation has no recovery block, so keep the 2.0 chip, the 1.0 chip or the original dump before programming an EPROM.
 
 | | |
 |---|---|
 | ROM image | `binary/BUBIOS2_SY019L1.BIN` (64 KB, 27C512) |
-| MD5 | `ef2babff61e23b201d0543b558b5fac2` |
+| MD5 | `7cb6cd433fc576ce2dc9781210522f6c` |
 | Built from | `binary/base/SY019L1_27C512_CHSPATCH.BIN` (ECHS v5, MD5 `8e520e91100f932d3f054883b08d37da`) |
 | Setup | BUBios 1.0 setup, version 2.1, one new Tools entry |
 
@@ -25,7 +25,7 @@ The 2.0 test on the board brought up these points. This is what 2.1 does about e
 | Fill in the fields early, and pause before the boot | Everything that can be known before the memory test is shown with the first screen: floppies, disk names and geometry, serial and parallel ports, option ROMs, shadow RAM, battery, and the clock when the early reading is valid. What cannot be known yet (the cache, which AMI sets up last) shows `...` until it is. After POST, a 3-second countdown runs before the boot (see below). |
 | Remove the BUBios text at the bottom right | Removed. The BIOS ID string is on the right of the status bar, ending one column from the edge like the title bar. |
 | Why does POST crash without "(C) American Megatrends Inc.," on screen? | This is AMI's copyright check, not an error check. It is now switched off, and the line is gone (see below). |
-| HDD auto-detect and/or LBA, if there is room | Both are in (see below). About 145 bytes are left in the ROM. |
+| HDD auto-detect and/or LBA, if there is room | Both are in (see below). About 110 bytes are left in the ROM. |
 
 ### The boot countdown
 
@@ -36,12 +36,15 @@ At the end of POST the screen shows:
 The number counts down once a second. The timing comes from the DRAM refresh signal, so it is the same at any CPU clock.
 
 - **DEL** runs the setup, after the password prompt if a password is set.
-  - If you leave setup without saving, or save without changing anything, the boot continues.
-  - If you save changes, the machine restarts so that POST applies them from the start, including drive types, cache and shadow.
+  - If nothing changed, the boot continues at once.
+  - If something changed, the machine restarts so that POST applies it from the start: drive types, cache, shadow, the auto-detect switch and everything else. Changing the switch on the Tools page counts even if you then leave setup without saving, because the switch takes effect at once.
+  - To find changes, BUBios compares AMI's two CMOS checksums (10h-2Dh and 34h-6Eh) and the auto-detect switch (7Eh/7Fh) before and after setup. Date and time live in the clock chip and need no restart.
 - **Any other key** boots at once.
 - With no key, it boots after 3 seconds.
 
-AMI's own "Hit DEL" during the memory test still works as before.
+DEL works at any time from the memory test to the end of the countdown. During the memory test, AMI catches it; after that, BUBios does.
+
+AMI's own "Hit DEL" during the memory test still works as before. There, POST simply carries on after setup. The disks are set up later in POST, so saved changes apply without a restart. When setup returns, BUBios asks the drives again: the names come back, and a drive is auto-detected if you just switched auto-detect on.
 
 ### Why POST crashed without the AMI copyright line
 
@@ -152,7 +155,7 @@ The dead code was found in three steps:
 
 The build script checks the MD5 of every removed range before clearing it, and of every kept neighbour after patching.
 
-**Space left after 2.1:** about 145 bytes, spread over nine small gaps. The build prints the exact numbers. The largest are 39 B (setup data block), 22 B (`429D` block) and 19 B each in the date/time and Tools blocks.
+**Space left after 2.1:** about 110 bytes, spread over nine small gaps. The build prints the exact numbers. The largest are 19 B each in the date/time and Tools blocks, 15 B in the setup data block and 14 B in the `429D` block.
 
 ## How it works (short version)
 
@@ -187,7 +190,7 @@ Run these from this folder. You need NASM, Python 3 and `pip install unicorn pil
 ```
 python3 py/build_bubios.py     # builds binary/BUBIOS2_SY019L1.BIN from binary/base/
 python3 py/test_bubios.py      # 73 checks of the setup
-python3 py/test_post.py        # 77 checks of POST, countdown, auto-detect, LBA (20-30 minutes)
+python3 py/test_post.py        # 83 checks of POST, countdown, setup visits, auto-detect, LBA (25-35 minutes)
 python3 py/regress_echs.py     # ECHS INT 13h regression + INT 19h boot test
 python3 py/shots.py            # setup screenshots into shots/
 ```

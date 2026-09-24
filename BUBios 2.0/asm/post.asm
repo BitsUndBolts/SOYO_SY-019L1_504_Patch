@@ -141,7 +141,8 @@ bu_post_init:
     cmp  byte [ST_FLAG], FLAG_UP   ; second call (after SETUP): keep the
     jne  .first                    ; memory count; the POST time would
     or   byte [ST_MISC], 1         ; include the time spent in SETUP
-    jmp  short .draw
+    mov  byte [ST_DISK], 0         ; ask the drives again (names, and
+    jmp  short .draw               ; auto-detect if SETUP switched it on)
 .first:
     mov  byte [ST_FLAG], FLAG_UP
     call rtc_now
@@ -1387,6 +1388,10 @@ bu_final:
     push cx
     mov  cx, 1
     call wait_units
+    mov  al, 0x0E                  ; DEL caught by AMI's POST keyboard
+    call P_CMOSRD                  ; poll (CMOS 0Eh bit 0), pressed after
+    test al, 1                     ; AMI's own check
+    jnz  .del
     mov  ah, 1
     int  0x16
     pop  cx
@@ -1395,6 +1400,14 @@ bu_final:
     pop  cx
     loop .sec
     jmp  short .boot
+.del:
+    pop  cx
+    pop  cx
+    and  al, 0xFE                  ; clear AMI's DEL flag
+    mov  ah, al
+    mov  al, 0x0E
+    call P_CMOSWR
+    jmp  short .setup
 .key:
     pop  cx
     mov  ah, 0
@@ -1430,14 +1443,6 @@ bu_final:
     hlt
     jmp  short .halt
 
-cmos_sum:                          ; AX = both AMI CMOS checksums added
-    mov  al, 0x2F
-    call bcd_raw
-    xchg ax, bx
-    mov  al, 0x3F
-    call bcd_raw
-    add  ax, bx
-    ret
 bcd_raw:                           ; AX = CMOS AL (AH=0) + CMOS AL-1 * 256
     push ax
     call P_CMOSRD
@@ -2139,3 +2144,21 @@ s_off:      db "Off", 0
 s_help_auto:db "Identify the IDE drives at every boot and set them up", 0
 
 tools_end:
+
+; ---------------------------------------------------------------------
+section data
+; ---------------------------------------------------------------------
+cmos_sum:                          ; AX = both AMI CMOS checksums and the
+    mov  al, 0x7F                  ; auto-detect switch (7Eh/7Fh, outside
+    call bcd_raw                   ; the checksums) added up
+    push ax
+    mov  al, 0x3F
+    call bcd_raw
+    push ax
+    mov  al, 0x2F
+    call bcd_raw                   ; (bcd_raw changes BX)
+    pop  bx
+    add  ax, bx
+    pop  bx
+    add  ax, bx
+    ret
