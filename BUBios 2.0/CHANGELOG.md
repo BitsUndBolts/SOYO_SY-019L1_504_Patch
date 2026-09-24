@@ -1,8 +1,21 @@
 # BUBios changelog
 
+## 2.1, sixth build — 2026-09-24
+
+ROM `binary/BUBIOS2_SY019L1.BIN`, MD5 `db32ec060dba87c8ff9d6cb162ce5d72`
+
+- **A drive set up in BIOS but not connected no longer stalls POST.** AMI waited about a minute at checkpoint 91h for it, then stopped with *HDD controller failure / Press F1*. On the board this looked like a freeze at *Checking devices*.
+  - When nothing answers on the IDE bus for that drive after the memory test, BUBios now sets its CMOS type to "not installed" and fixes the checksum. This happens with auto-detect on or off, before AMI's disk setup.
+  - The POST screen shows `...` until then, and `None` after.
+  - New routines `hd_remove` and `cmos_csum` (the checksum tail of `auto_set`).
+- **DEL feedback.** As soon as DEL has been seen, the status line says *Entering Setup*, during the memory test and up to the setup screen (AMI's flag, CMOS 0Eh bit 0). The memory display redraws the status line for this.
+- **More room.** The 40 bytes of AMI's old memory-count print that the 4EA1h patch jumps over (4EAA-4ED1) are now a code block (`section mem`).
+- `test_post.py`: 92 checks.
+
 ## Floppy change line investigation — 2026-09-24 (no ROM change)
 
 - **Symptom on the board:** after a floppy swap, MS-DOS 7.1 shows the old directory. Windows 95 is not affected.
+- **Result on the board (DSKCHG):** the change line never appears while a CF card is on the IDE bus, whether or not it is set up. It is fine with only the CF adapter, or with Seagate/WD hard disks. The CF card drives bit 7 of port 3F7h. Workaround: `DRIVPARM=/D:0 /F:7` in CONFIG.SYS (not yet tested).
 - **Findings:**
   - AMI's floppy code is byte-identical in the original, ECHS and BUBios ROMs.
   - In the emulator, INT 13h 15h/16h answer identically with the original ROM and with BUBios 2.1 (change line present; 06 after a swap).
@@ -12,7 +25,7 @@
 
 ## 2.1, fifth build — 2026-09-24
 
-ROM `binary/BUBIOS2_SY019L1.BIN`, MD5 `d240bc3299046163126bc1d5834b2e16`
+ROM MD5 `d240bc3299046163126bc1d5834b2e16` (replaced by the sixth build)
 
 - **Hang at the video BIOS sign-on after power-on or RESET, found.** AMI runs this part of POST with interrupts off; on a cold start the interrupt controllers are not set up yet. The clock measurement (`measure_clock`) ended with STI and so turned interrupts on in the middle of it. Any interrupt that arrived before AMI set up the controllers then jumped through an undefined vector. It now saves and restores the interrupt flag (PUSHF/CLI … POPF). New test: the interrupt flag is still off after the POST screen's early work (the fourth build fails it).
 - **Coprocessor probe moved to the end of POST**, as suggested. By then interrupts and AMI's IRQ 13 handler are in place. The field shows `...` until then, like the cache. The early F0h/F1h reset from the fourth build is gone; only the busy latch is cleared (F0h) before the probe.

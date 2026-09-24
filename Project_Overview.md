@@ -147,9 +147,16 @@ of the 64 KB ROM are left.
   - a 4 GB slave (ECHS)
   - Windows 95 B installed
   - the countdown, auto-detect and setup visits
-- **Waiting for a board test:**
-  - the fifth build: fix for an occasional hang at the video sign-on after power-on/RESET (an early STI)
-  - the floppy change-line investigation (`tools/DSKCHG.COM`)
+- **Waiting for a board test:** the sixth build.
+  - Fixed in it: a drive set up in BIOS but not connected no longer stalls
+    POST (it is dropped from CMOS), and the status line shows "Entering
+    Setup" once DEL is seen.
+  - Also to confirm: the fifth build's fix for the occasional hang at the
+    video sign-on after power-on/RESET (an early STI).
+- **Floppy change line under MS-DOS:** it fails whenever a CF card is on the
+  IDE bus. The card drives bit 7 of port 3F7h; hard disks don't, and the BIOS
+  code is unchanged. Workaround to test: `DRIVPARM=/D:0 /F:7` in CONFIG.SYS.
+  See `BUBios 2.0/README.md`.
 - **How to continue:**
   1. Read `BUBios 2.0/README.md`, section *Status and open items*.
   2. Build with `python3 py/build_bubios.py`, run from `BUBios 2.0/`.

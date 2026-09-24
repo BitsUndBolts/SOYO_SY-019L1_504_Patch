@@ -214,6 +214,21 @@ tt = rows(t2)
 check('small ROM-table drive (type 2): no ECHS arrow', 'Type 2' in tt[R_CGEO] and '615/4/17' in tt[R_CGEO]
       and 'DOS' not in tt[R_CGEO] and '20 MB' in tt[R_CGEO], tt[R_CGEO])
 
+q, r, t2, t_cd = boot(cmos=make_cmos(drive=(1974, 16, 63)), drive=None)
+c = q.cmos
+check('C: set up in CMOS but not connected: no long wait, dropped from CMOS, "None"',
+      r == 'int19' and t_cd and t_cd < 15000 and c[0x12] == 0 and 'None' in rows(t2)[R_C]
+      and (sum(c[0x10:0x2E]) & 0xFFFF) == (c[0x2E] << 8 | c[0x2F]), (r, t_cd, hex(c[0x12]), rows(t2)[R_C]))
+q, r, t2, t_cd = boot(cmos=make_cmos(drive=(16000, 16, 63), drive_d=(8912, 15, 63)), drive=(16000, 16, 63))
+check('D: set up but not connected: D: dropped, C: kept', r == 'int19' and q.cmos[0x12] == 0xF0
+      and 'None' in rows(t2)[R_D] and '16000/16/63' in rows(t2)[R_CGEO], (r, hex(q.cmos[0x12])))
+q = Post(ROM); q.type_key(0x53, at_ms=4000); st = {}
+def ent(z):
+    if 'Entering Setup' in rows(z.text())[R_STAT] and '\u2591' in rows(z.text())[R_MEM]: st['seen'] = True
+    return 'BUBios (tm)' in z.text()
+q.run(max_ms=40000, until=ent)
+check('DEL during the memory test: status says "Entering Setup" until SETUP opens', st.get('seen') and 'BUBios (tm)' in q.text())
+
 # ---------------------------------------------------------------- auto-detection
 def auto_cmos(**kw):
     c = make_cmos(**kw); c[0x7F] = 1; c[0x7E] = 0xA4; return c

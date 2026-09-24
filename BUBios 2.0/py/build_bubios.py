@@ -156,6 +156,12 @@ old = bytes.fromhex('8bc303c5503d1b06731db90100' '3d9d00730eb1023c107308b1033c02
                     'b030e876a6e2f958e820febee874e85ca6')
 new = bytes.fromhex('8bc303c5') + call(0x4EA5, 'bu_memshow') + b'\xeb' + bytes([0x4ED2 - 0x4EAA])
 patch(0x4EA1, old, new + NOP * (len(old) - len(new) - 0) , 'memory count -> bu_memshow')
+# 2.1: the 40 bytes jumped over (4EAA-4ED1) hold code (section mem)
+MEM_BLK = (0x4EAA, 0x4ED2)
+v, st, ln = sec['mem']
+assert v == MEM_BLK[0]
+if v + ln > MEM_BLK[1]: die('mem block overflow (%d bytes too long)' % (v + ln - MEM_BLK[1]))
+rom[v:v + ln] = blob[st:st + ln]
 patch(0x1610, bytes.fromhex('e85edf'), call(0x1610, 'bu_chime'), 'end-of-POST beep -> bu_chime')
 patch(0x1613, bytes.fromhex('e8a100'), call(0x1613, 'bu_refresh'), 'clear screen -> bu_refresh')
 patch(0x164C, bytes.fromhex('e87123'), call(0x164C, 'bu_final'), 'config box -> bu_final')
@@ -224,5 +230,7 @@ title = cstr(sym['s_title'])
 for name, (lo, hi) in BLOCKS:
     v, st, ln = sec[name]
     print('%-5s %04X-%04X  %4d bytes (%d free)' % (name, v, v + ln - 1, ln, hi - v - ln))
+v, st, ln = sec['mem']
+print('%-5s %04X-%04X  %4d bytes (%d free)' % ('mem', v, v + ln - 1, ln, MEM_BLK[1] - v - ln))
 print('title %d chars' % len(title))
 print('wrote', os.path.relpath(OUT, ROOT), 'MD5', hashlib.md5(rom).hexdigest())

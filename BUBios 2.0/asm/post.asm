@@ -289,6 +289,7 @@ bu_memshow:
 .set:
     mov  [ST_TOTAL], ax
     call vid_es
+    call draw_status               ; "Entering Setup" as soon as DEL is seen
     call draw_memory
     jmp  short hook_ret
 
@@ -718,7 +719,7 @@ draw_status:
     mov  cx, 80
     mov  dx, POS(R_STAT, 0)
     call fill_at
-    mov  si, [ST_STAT]
+    call stat_text
     mov  dx, POS(R_STAT, 1)
     mov  al, AT_STAT
     call text_at
@@ -1078,7 +1079,8 @@ auto_set:
     call .wr
     mov  ah, [ss:si+4]
     call .wr                       ; sectors
-    xor  dx, dx                    ; checksum 10h-2Dh -> 2Eh/2Fh
+cmos_csum:                         ; checksum 10h-2Dh -> 2Eh/2Fh
+    xor  dx, dx
     mov  al, 0x10
 .s: push ax
     call P_CMOSRD
@@ -1093,8 +1095,10 @@ auto_set:
     mov  al, 0x2F
     mov  ah, dl
     call P_CMOSWR
-.r: ret
-.wr:call P_CMOSWR
+auto_set.r:
+    ret
+auto_set.wr:
+    call P_CMOSWR
     inc  al
     ret
 
@@ -1124,6 +1128,19 @@ fpu_probe:
 .no:pop  eax
     mov  cr0, eax
     ret
+
+; stat_text -> SI = status line text; once AMI's keyboard poll has seen
+; DEL (CMOS 0Eh bit 0) it says so
+stat_text:
+    mov  si, [ST_STAT]
+    push ax
+    mov  al, 0x0E
+    call P_CMOSRD
+    test al, 1
+    pop  ax
+    jz   .r
+    mov  si, s_st_setup
+.r: ret
 
 post2_end:
 
@@ -1491,13 +1508,16 @@ detect_disks:
     mov  si, sp
     call ide_id
     jnc  .ok
-    or   al, al                    ; AL=1: no drive there, don't ask again
-    jz   .later
-    mov  al, 0x10
+    or   al, al                    ; AL=1: no drive there. Final only after
+    jz   .later                    ; the memory test (a drive may not answer
+    cmp  word [ST_STAT], s_st_dev  ; right after power-on): then don't ask
+    jne  .later                    ; again, and drop it from CMOS so AMI does
+    mov  al, 0x10                  ; not wait for it
     mov  cl, bl
     shl  al, cl
     or   [ST_DISK], al
-    call draw_disk                 ; "None" if CMOS has no drive either
+    call hd_remove
+    call draw_disk                 ; "None"
     jmp  short .x
 .later:                            ; no answer yet: "..." (asked again
     mov  si, s_dots + 3            ; after the memory test)
@@ -2180,3 +2200,34 @@ dots_or:
     mov  si, s_dots
 .p: jmp  pstr_v
 s_dots: db "...", 0
+
+
+; ---------------------------------------------------------------------
+section data
+; ---------------------------------------------------------------------
+s_st_setup: db "Entering Setup", 0
+
+; ---------------------------------------------------------------------
+; in AMI's old memory-count print (4EAA-4ED1, jumped over since 2.0)
+section mem start=0x3200 vstart=0x4EAA
+; ---------------------------------------------------------------------
+; hd_remove: BL = drive that did not answer after the memory test: if CMOS
+; has it set up, set its type to "none" so that AMI's disk setup does not
+; wait for it (about a minute, then "HDD controller failure")
+hd_remove:
+    push bx
+    call disk_geo
+    pop  bx
+    jc   .r                        ; not set up
+    mov  al, 0x12
+    call P_CMOSRD
+    mov  ah, 0x0F                  ; keep the other drive's nibble
+    or   bl, bl
+    jz   .c
+    mov  ah, 0xF0
+.c: and  ah, al
+    mov  al, 0x12
+    call P_CMOSWR
+    jmp  cmos_csum
+.r: ret
+mem_end:
