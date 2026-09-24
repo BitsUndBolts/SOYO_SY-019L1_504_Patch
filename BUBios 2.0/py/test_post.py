@@ -333,6 +333,17 @@ r, tt = setup_then(q, QUIT[1:])
 check('after AMI\'s own SETUP visit the countdown does not open SETUP again', r == 'int19' and q.cmos[0x0E] & 1 == 0
       and COUNTDOWN in '\n'.join(tt), (r, hex(q.cmos[0x0E])))
 
+# ---------------------------------------------------------------- floppy change line (INT 13h 15h/16h)
+q = Post(ROM); q.run(max_ms=40000)
+x = call13(q, 0x1500, dx=0)
+check('floppy A: INT 13h 15h reports a change line (AH=02)', x['ax'] >> 8 == 2 and x['cf'] == 0, H(x))
+q.fdc_dchg = True
+x = call13(q, 0x1600, dx=0)
+check('floppy A: INT 13h 16h after a disk swap: changed (AH=06)', x['ax'] >> 8 == 6 and x['cf'] == 1, H(x))
+q.fdc_dchg = False
+x = call13(q, 0x1600, dx=0)
+check('floppy A: INT 13h 16h without a swap: not changed (AH=00)', x['ax'] >> 8 == 0 and x['cf'] == 0, H(x))
+
 # ---------------------------------------------------------------- errors, schemes, mono
 bad = bytearray(b'\xff' * 128); bad[0x0F] = 0
 q = Post(ROM, cmos=bad, drive=None); r = q.run(max_ms=15000)

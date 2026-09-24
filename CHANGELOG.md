@@ -1,8 +1,11 @@
 # Changelog
 
-This repository has two parts. This file covers the first one, the ECHS
-large-disk patch. The setup UI built on top of it has its own changelog:
-[`BUBios/CHANGELOG.md`](BUBios/CHANGELOG.md).
+This repository has three parts. This file covers the first one, the ECHS
+large-disk patch. The other two have their own changelogs:
+
+- the setup UI built on top of it: [`BUBios/CHANGELOG.md`](BUBios/CHANGELOG.md)
+- BUBios 2.x (POST screen, auto-detect, LBA):
+  [`BUBios 2.0/CHANGELOG.md`](BUBios%202.0/CHANGELOG.md)
 
 ## ECHS large-disk patch
 

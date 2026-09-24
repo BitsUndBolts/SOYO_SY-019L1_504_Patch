@@ -20,6 +20,14 @@ new setup program in the style of MR BIOS:
 
 ![BUBios Summary page](BUBios/shots/1_summary.png)
 
+**[BUBios 2.1](BUBios%202.0/README.md)** (folder `BUBios 2.0/`) is the current stage. It adds:
+
+- a full-screen POST display with a 3-second boot countdown
+- automatic IDE detection
+- the INT 13h extensions (LBA, up to 128 GB)
+
+It has run on the board with drives of up to 80 GB and with Windows 95 B.
+
 > This repository contains only the final version of the patch (v5).
 > Earlier development versions were omitted for clarity; the bug history
 > in `BIOS_Evaluation.md` still refers to them.
@@ -52,6 +60,10 @@ py/
   verify_model.py                  translation math in plain Python
   analyze_bios.py                  reproduces the ROM-structure facts
 
+BUBios 2.0/                        stage 3 (current): BUBios 2.1 — POST screen, countdown,
+                                   auto-detect, LBA; own README/CHANGELOG, build, tests, tools
+  binary/BUBIOS2_SY019L1.BIN       ECHS + BUBios 2.1 (MD5 in BUBios 2.0/CHANGELOG.md)
+
 BUBios/                            stage 2: the MR-BIOS-style setup UI
   README.md, CHANGELOG.md          what it does, how it works, version history
   binary/BUBIOS_SY019L1.BIN        ECHS patch + BUBios   MD5 087565a6ba5e86a058275965c6bdca60
@@ -62,7 +74,9 @@ BUBios/                            stage 2: the MR-BIOS-style setup UI
 
 ## Using the ROM
 
-1. Program one of the two ROMs into a 27C512 EPROM:
+1. Program one of the ROMs into a 27C512 EPROM:
+   - `BUBios 2.0/binary/BUBIOS2_SY019L1.BIN`: everything, including the POST
+     screen, auto-detect and LBA (see `BUBios 2.0/README.md`).
    - `BUBios/binary/BUBIOS_SY019L1.BIN`: large-disk support and the new
      BUBios setup screens.
    - `binary/SY019L1_27C512_CHSPATCH.BIN`: large-disk support with the

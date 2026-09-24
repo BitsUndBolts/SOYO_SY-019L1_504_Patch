@@ -9,6 +9,9 @@
 - `BIOS_Evaluation.md` — root-cause analysis and the full bug history
 - `CHANGELOG.md` — version history of the ECHS patch (v1 → v5)
 - `BUBios/README.md` — stage 2: the BUBios setup UI built on top of the patch
+- `BUBios 2.0/README.md` — stage 3, **current work**: BUBios 2.1 (POST screen,
+  boot countdown, disk auto-detect, LBA / INT 13h extensions). Its section
+  *Status and open items* is the place to pick up from.
 
 > **Final version only.** The patch went through five versions (v1 → v5)
 > during development. This repository contains **only the final, hardware-
@@ -100,8 +103,8 @@ emulator tests need `pip install unicorn`.
 
 - **Ceiling.** 1024 x 255 x 63 x 512 = 7.84 GiB (8.42 GB) is the INT 13h
   CHS limit. Larger drives work, but only their first 7.84 GiB can be
-  used. Going beyond that would need the INT 13h extensions (AH=41h/42h),
-  which is outside the scope of this project.
+  used. Going beyond that needs the INT 13h extensions (AH=41h/42h). The
+  ECHS ROM does not have them; BUBios 2.1 (stage 3) adds them.
 - **Boot-sector virus protection.** This is an original AMI feature (CMOS
   option, check routine at `0xAB62`). If FDISK or FORMAT ever stop with a
   "Format !!!" or "BootSector Write !!!" warning, turn the option off in
@@ -120,3 +123,35 @@ clock, coprocessor, memory, and each disk with its physical and ECHS
 geometry), and lets you type the date and time as numbers. The disk code
 is unchanged. `BUBios/binary/BUBIOS_SY019L1.BIN` is the ROM to program
 if you want both. See `BUBios/README.md`.
+
+## 8. Stage 3 — BUBios 2.x (current)
+
+`BUBios 2.0/` holds BUBios 2.1. It is built from the ECHS ROM plus the
+BUBios setup and adds:
+
+- a full-screen POST display
+- a 3-second boot countdown with DEL for setup
+- a clean screen for DOS
+- automatic IDE detection (Tools page switch)
+- the INT 13h extensions (EDD 1.1, 28-bit LBA, up to 128 GB)
+
+AMI's dead Hard Disk Utility code was removed to make room; about 80 bytes
+of the 64 KB ROM are left.
+
+- **ROM:** `BUBios 2.0/binary/BUBIOS2_SY019L1.BIN`. `BUBios 2.0/CHANGELOG.md`
+  gives the MD5 of each build.
+- **Confirmed on the board** (builds 1-4):
+  - 64 MB RAM
+  - a 20 GB master and an 80 GB Samsung (LBA)
+  - a 16 GB CF card (reports 31045/16/63)
+  - a 4 GB slave (ECHS)
+  - Windows 95 B installed
+  - the countdown, auto-detect and setup visits
+- **Waiting for a board test:**
+  - the fifth build: fix for an occasional hang at the video sign-on after power-on/RESET (an early STI)
+  - the floppy change-line investigation (`tools/DSKCHG.COM`)
+- **How to continue:**
+  1. Read `BUBios 2.0/README.md`, section *Status and open items*.
+  2. Build with `python3 py/build_bubios.py`, run from `BUBios 2.0/`.
+  3. Test with `py/test_bubios.py`, `py/test_post.py` (POST emulator) and
+     `py/regress_echs.py`.

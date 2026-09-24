@@ -196,7 +196,7 @@ Run these from this folder. You need NASM, Python 3 and `pip install unicorn pil
 ```
 python3 py/build_bubios.py     # builds binary/BUBIOS2_SY019L1.BIN from binary/base/
 python3 py/test_bubios.py      # 74 checks of the setup
-python3 py/test_post.py        # 86 checks of POST, countdown, setup visits, auto-detect, LBA (25-35 minutes)
+python3 py/test_post.py        # 89 checks of POST, countdown, setup visits, auto-detect, LBA, floppy change line (25-35 minutes)
 python3 py/regress_echs.py     # ECHS INT 13h regression + INT 19h boot test
 python3 py/shots.py            # setup screenshots into shots/
 ```
@@ -218,6 +218,7 @@ python3 py/shots.py            # setup screenshots into shots/
   - a cleared CMOS without the copyright line, including F1 into setup
   - the colour schemes, monochrome and the chime
   - that the POST checkpoint sequence is identical to BUBios 1.0
+  - the floppy change line through INT 13h 15h/16h (the emulator models DIR bit 7 of port 3F7)
 - **86Box** (v6.0, machine *[OPTi 495] DataExpert OPTi-495SX*, with `roms/machines/ami495/opt495sx.ami` replaced by this ROM) ran the full POST on an emulated 386DX-40 with a 387, a Tseng ET4000 or MDA card and an IDE disk. It confirmed:
   - the ET4000 sign-on
   - the 40.0 MHz clock reading
@@ -227,10 +228,72 @@ python3 py/shots.py            # setup screenshots into shots/
 
   ![LBA boot sector test](shots/post_7_lba_test.png)
 
+## Floppy disk change in MS-DOS (under investigation)
+
+**Symptom (on the board, MS-DOS 7.1 only, TEAC drive and GoTek):** after a floppy swap, `DIR A:` still lists the old disk. Taking the disk out (a read error) or Ctrl+C makes DOS read it again. Windows 95 does not show this.
+
+**How DOS knows about a swap.**
+- At boot, DOS asks INT 13h AH=15h whether drive A: has a change line (AH=02 means yes).
+- Before it trusts its cached FAT and directory, it asks INT 13h AH=16h.
+- The BIOS then turns the motor on, selects the drive and reads bit 7 of port 3F7h (the Digital Input Register), which carries pin 34 (DSKCHG).
+  - AH=06 means changed: DOS reads the disk again.
+  - AH=00 means not changed: DOS uses its cache.
+- The line stays active until the drive sees a step pulse with a disk in it (the next seek).
+- Windows 95 uses its own floppy driver, not INT 13h.
+
+**What was checked (emulator and ROM compare):**
+- **The floppy code is untouched.** A byte compare of the original ROM, the ECHS ROM and BUBios 2.1 shows no change anywhere in AMI's floppy code: the INT 40h handler at `EC59`, and the FDC routines at `8878`, `89FC`, `940C-97D4` and `C5F2`.
+  - All changed ranges are the ECHS/BUBios patch sites and blocks that were all zeros in the original ROM.
+  - The INT 13h entry at `A3E7` passes DL < 80h on to AMI unchanged.
+- **The behaviour is identical.** In the POST emulator, with a modelled change line, the original ROM and BUBios 2.1 answer identically:
+  - AH=15h: 02, change line present
+  - AH=16h after a swap: 06, CF=1
+  - AH=16h without a swap: 00
+  - AH=16h writes 1Ch to 3F2h (motor A on, drive A selected) and then reads 3F7h.
+  - `test_post.py` now checks this.
+
+So BUBios did not remove the feature. The BIOS reports the change line faithfully, as long as bit 7 of port 3F7h shows it.
+
+**Most likely cause: the IDE device answers on port 3F7h too.** Port 3F7h is shared:
+- The floppy controller drives bit 7 (the change line).
+- The IDE interface on the same I/O card decodes the same address as the drive's "Drive Address" register.
+- The ATA standard says the drive must leave bit 7 alone, but that register was dropped from later ATA versions. Newer drives, and many CompactFlash cards, drive all eight bits.
+- The IDE device then overrides the floppy's bit 7. DOS asks the BIOS, which reads a 0 ("not changed"), so DOS keeps its cache.
+- Windows 95's floppy driver may use a different way to notice a new disk. That would explain why only DOS is affected. This is not proven yet.
+
+**Test it with `tools/DSKCHG.COM`** (source `tools/dskchg.asm`, 408 bytes, runs under DOS):
+1. Put a disk in A:.
+2. Run `DIR A:`, which clears the line.
+3. Start `DSKCHG`.
+4. Swap the disk.
+5. Read the line, updated several times a second: AH=15h, AH=16h, the raw 3F7h byte and its bit 7.
+   - Keys **M**, **S** and **N** select the IDE master, the IDE slave or neither just before 3F7h is read.
+   - **Esc** quits.
+
+| Result | Meaning |
+|---|---|
+| `16h=06`, `line=1` after the swap | The line works through the BIOS. Then the problem is in DOS: SMARTDRV floppy caching, or two disk images with the same volume serial number. |
+| `line=0` with IDE sel=none or master, `line=1` with **S** (slave, i.e. nobody) | The IDE device drives bit 7 of 3F7h. A BIOS workaround is possible: select a non-existent IDE device before AH=16h reads 3F7h. |
+| `line=0` always, even with the IDE drive unplugged | The signal does not reach the controller. Check the drive's pin 34 setting (DC, not RDY; on a GoTek: FlashFloppy `interface = ibmpc` or the JC jumper) and the cable. |
+| The same result with the original AMI ROM or BUBios 1.0 | Confirms it is not caused by BUBios. |
+
+The raw 3F7h byte also shows bits 0-6. If they change with M/S/N, an IDE device is answering on 3F7h.
+
+## Status and open items
+
+For the next session:
+
+- **Fifth build** (MD5 in the table at the top) is not yet confirmed on the board. Things to check:
+  - no more hangs at the video sign-on after power-on or RESET
+  - the coprocessor shown at the end of POST
+- **Floppy change line in DOS:** waiting for the `DSKCHG` results (table above). If an IDE device turns out to drive bit 7 of 3F7h, the fix is a small wrapper around INT 13h AH=16h for DL < 80h: select IDE device 1 (write B0h to 1F6h), let AMI read 3F7h, then select the master again.
+- **Space:** about 80 bytes are left in the ROM, spread over small gaps; `py/build_bubios.py` prints them. Code can live in any block, including `section data` (7902h) and `section code2` (7F14h).
+- **Testing:** `py/test_post.py` takes 25-35 minutes. Stop any stray 86Box processes first; they slow it down a lot.
+
 ## Known limits
 
 - The POST time uses the RTC, so its resolution is one second. It is not shown after a visit to setup (it would include the time spent there).
 - The clock constants are calibrated for Intel/AMD 386 and 486 cores. A Cyrix 486DLC-class CPU is detected and named, but its clock reading may be off until it is calibrated on a real chip.
 - Option ROMs that print during POST (for example a network boot ROM) print wherever the cursor is.
 - The INT 13h extensions use 28-bit LBA (up to 128 GB). They do not provide the EDD 3.0 device path, or the 49h/4Eh functions.
-- With auto-detect on, a drive larger than 8.4 GB is set up as 16383/16/63. Through CHS/ECHS, DOS sees 8,063 MB, as with any BIOS of this kind. The rest is reachable through LBA.
+- With auto-detect on, a drive is set up with the geometry it reports (16383/16/63 for most drives above 8.4 GB, 31045/16/63 for the 16 GB CF card). Through CHS/ECHS, DOS sees at most 8,063 MB (1024/255/63), as with any BIOS of this kind. The rest is reachable through the INT 13h extensions.

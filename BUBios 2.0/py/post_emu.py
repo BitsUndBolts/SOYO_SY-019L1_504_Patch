@@ -204,6 +204,7 @@ class Post:
         # FDC (82077-style: reset, SPECIFY, RECALIBRATE, SEEK, SENSE)
         s.fdc_dor = 0x0C; s.fdc_res = []; s.fdc_cmd = []; s.fdc_reset_sense = 0
         s.fdc_st0 = None; s.fdc_pcn = 0
+        s.fdc_dchg = True          # floppy disk-change line (DIR bit 7): set at power-on / disk swap
         # video: a colour (or, with mono=True, a monochrome) adapter's CRTC
         s.cur = (0, 0); s.curshape = 0x0607; s.vmode = 3
         s.crtc = bytearray(32); s.crtc_idx = 0
@@ -375,7 +376,7 @@ class Post:
             return 0xD0 if s.fdc_res else 0x80
         if port == 0x3F5:
             return s.fdc_res.pop(0) if s.fdc_res else 0
-        if port == 0x3F7: return 0x00
+        if port == 0x3F7: return 0x80 if s.fdc_dchg else 0x00     # DIR: bit 7 = disk changed
         if port == 0x3DA or port == 0x3BA:
             return 0x09 if (s.t // 16000) & 1 else 0x00
         if port in (0x3D5, 0x3B5):
@@ -493,8 +494,10 @@ class Post:
                 else:
                     s.fdc_res = [0x80]
             elif c == 0x07:
+                s.fdc_dchg = False                         # a step pulse with a disk in clears the line
                 s.fdc_pcn = 0; s.fdc_st0 = 0x20 | (cmd[1] & 3); s.raise_irq(6)
             elif c == 0x0F:
+                if cmd[2] != s.fdc_pcn: s.fdc_dchg = False
                 s.fdc_pcn = cmd[2]; s.fdc_st0 = 0x20 | (cmd[1] & 3); s.raise_irq(6)
             elif c == 0x04:
                 s.fdc_res = [0x28 | (cmd[1] & 3) | (0x10 if s.fdc_pcn == 0 else 0)]

@@ -1,5 +1,15 @@
 # BUBios changelog
 
+## Floppy change line investigation — 2026-09-24 (no ROM change)
+
+- **Symptom on the board:** after a floppy swap, MS-DOS 7.1 shows the old directory. Windows 95 is not affected.
+- **Findings:**
+  - AMI's floppy code is byte-identical in the original, ECHS and BUBios ROMs.
+  - In the emulator, INT 13h 15h/16h answer identically with the original ROM and with BUBios 2.1 (change line present; 06 after a swap).
+  - Most likely cause: an IDE device driving bit 7 of port 3F7h, which is shared with the floppy's change line. Details are in the README.
+- **New `tools/DSKCHG.COM`** (source `tools/dskchg.asm`): shows INT 13h 15h/16h and the raw 3F7h byte live under DOS. The M/S/N keys select an IDE device before the read, to test the 3F7h theory on the board.
+- **`post_emu.py`** models the change line (DIR bit 7, cleared by a step). `test_post.py` has 3 new checks (89).
+
 ## 2.1, fifth build — 2026-09-24
 
 ROM `binary/BUBIOS2_SY019L1.BIN`, MD5 `d240bc3299046163126bc1d5834b2e16`
