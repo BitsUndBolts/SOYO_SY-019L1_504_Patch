@@ -12,7 +12,7 @@ import os, re, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from setup_emu import *
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-rom_path = sys.argv[1] if len(sys.argv) > 1 else os.path.join(ROOT, 'binary', 'BUBIOS2_SY019L1.BIN')
+rom_path = sys.argv[1] if len(sys.argv) > 1 else os.path.join(ROOT, 'binary', 'BUBIOS_SY019L1.BIN')
 mp = open(os.path.join(ROOT, 'asm', 'bubios.map')).read()
 sym = {m.group(2): int(m.group(1), 16) for m in re.finditer(r'^\s+[0-9A-F]+\s+([0-9A-F]+)\s+(\w+)\s*$', mp, re.M)}
 loop = (sym['bu_tloop'], sym['bu_tloop_end'])
