@@ -12,10 +12,13 @@ parts:
 | Part | Folder | ROM | MD5 |
 |---|---|---|---|
 | **ECHS large-disk patch v5**: lifts the 504 MB limit to the INT 13h CHS ceiling of 8.42 GB (7.84 GiB), no LBA | repository root | `binary/SY019L1_27C512_CHSPATCH.BIN` | `8e520e91100f932d3f054883b08d37da` |
-| **BUBios 2.1**: the ECHS patch plus a new setup, a POST screen with boot countdown, IDE auto-detection, INT 13h extensions (LBA, up to 128 GB) and a CF-card floppy fix | `BUBios/` | `BUBios/binary/BUBIOS2_SY019L1.BIN` | `b975393064d7b8a387dd7bf6e5d32286` |
+| **BUBios 2.1**: the ECHS patch plus a new setup, a POST screen with boot countdown, IDE auto-detection, INT 13h extensions (LBA, up to 128 GB) and a CF-card floppy fix | `BUBios/` | `BUBios/binary/BUBIOS2_SY019L1.BIN` | `d5894024e3665d4a426e5b7cdb47a87c` |
 
-**Status: complete.** Both ROMs are final and confirmed on the real
-board. Their build scripts reproduce them byte for byte; treat the
+**Status: complete.** Both ROMs are confirmed on the real board. The
+BUBios ROM in `BUBios/binary/` is the eighth build of 2.1, which only adds a
+`CF` badge on the POST screen to the confirmed seventh build (MD5
+`b975393064d7b8a387dd7bf6e5d32286`, in the git history); the badge still
+has to be confirmed on the board. Their build scripts reproduce them byte for byte; treat the
 binaries as the reference, not as something to regenerate.
 
 BUBios is built on top of the ECHS ROM and leaves its disk code
@@ -96,10 +99,11 @@ text with a full-screen POST display. It adds:
 - dropping configured drives that are not connected
 - the INT 13h extensions (EDD 1.1, 28-bit LBA, up to 128 GB)
 - "no change line" for the floppy while a CF card is on the IDE bus
-  (the card hides the change line, so MS-DOS missed floppy swaps)
+  (the card hides the change line, so MS-DOS missed floppy swaps); the POST
+  screen marks such a card with a ` CF ` badge
 
 AMI's dead code (the "System Configuration" box and the Hard Disk
-Utility, 4,501 bytes) was removed to make room. **About 10 bytes of the
+Utility, 4,501 bytes) was removed to make room. **About 13 bytes of the
 ROM are left.**
 
 **Confirmed on the board** with the release (2.1, seventh build): 16 and
@@ -118,7 +122,10 @@ dump (MD5 above). This applies to both ROMs.
 ## 7. Tooling
 
 The builds need NASM and Python 3; the emulator tests need
-`pip install unicorn` (and `pillow` for BUBios screenshots).
+`pip install unicorn` (and `pillow` for BUBios screenshots). Last checked
+from a fresh copy on 2026-09-25 with Python 3.11, NASM 2.16.01, Unicorn
+2.1.4 and Pillow 12.2: both builds reproduce their ROMs byte for byte and
+every test passes.
 
 **ECHS patch** (run from the repository root):
 
@@ -144,7 +151,7 @@ The builds need NASM and Python 3; the emulator tests need
   `binary/base/`, asserting every patch site, reused AMI string and
   record, and dead-code range.
 - `py/test_bubios.py` (74 checks, setup emulator), `py/test_post.py`
-  (94 checks, full POST emulator, 25-35 minutes), `py/regress_echs.py`
+  (97 checks, full POST emulator, 25-35 minutes), `py/regress_echs.py`
   (the ECHS tests on the BUBios ROM).
 - `py/setup_emu.py`, `py/post_emu.py`, `py/int13x.py`: the emulators.
 - `py/shots.py`: setup screenshots.

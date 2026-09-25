@@ -207,7 +207,7 @@ at `B870`. The ROM integrity check at `F419` is left untouched.
 
 Kept between the reclaimed ranges: CR/LF routine `3B84-3B8E`, drive
 information display `4168-429C` (used by the setup's auto-detect), error
-dialog `49DB-4A43`, error and auto-detect texts `3482-36D3`. About 10
+dialog `49DB-4A43`, error and auto-detect texts `3482-36D3`. About 13
 bytes are left in the whole ROM.
 
 ### 9.4 CMOS, BDA and POST checkpoints
@@ -219,7 +219,8 @@ bytes are left in the whole ROM.
 | CMOS `10h-2Dh`, checksum `2Eh/2Fh`; CMOS `34h-6Eh` | AMI's two checksummed ranges |
 | CMOS `7Fh` / `7Eh` | BUBios auto-detect switch (bit 0) / check byte (`7Fh xor A5h`), outside both checksums |
 | BDA `40:F0-40:FF` | BUBios state between the POST hooks, cleared by `bu_final` |
-| BDA `40:8F` bit 3 | a CF card is on the IDE bus (read by `cf_chgline`) |
+| BDA `40:FE` bit 6 | a CF card answered IDENTIFY (set by `detect_disks`, which also draws the ` CF ` badge on that drive's row) |
+| BDA `40:8F` bit 3 | a CF card is on the IDE bus (set by `bu_final` from `40:FE` bit 6, read by `cf_chgline`) |
 | checkpoint `05h` | chipset setup; turns shadow RAM off again after a restart |
 | checkpoint `91h` | AMI's hard-disk setup; waits about a minute for a configured drive that is missing |
 | checkpoint `9Ah` | AMI's COM/LPT probe |

@@ -159,12 +159,17 @@ if os.path.exists(ROM10):
 snap = {}
 def grab(q):
     u = struct.unpack('<H', bytes(q.mu.mem_read(0x4F6, 2)))[0]
-    if 0x80 <= u < 0x90 and 'mid' not in snap: snap['mid'] = q.text()
+    if 0x80 <= u < 0x90:
+        if 'mid' not in snap: snap['mid'] = q.text()
+        snap.setdefault('stat', []).append(q.text().split('\n')[R_STAT])
     return False
 q = Post(ROM); q.run(max_ms=40000, until=grab)
 m = rows(snap.get('mid', ''))
 check('mid-test: bar partly filled', '█' in m[R_MEM] and '░' in m[R_MEM], m[R_MEM])
-check('mid-test: status says DEL enters setup', 'Press DEL to run Setup' in m[R_STAT], m[R_STAT])
+# the status bar is redrawn for every 64 KB block, so a sample can catch it half drawn
+st = snap.get('stat', [])
+check('mid-test: status says DEL enters setup',
+      st and sum('Press DEL to run Setup' in x for x in st) > len(st) * 0.99, [x for x in st if 'Press DEL' not in x][:3])
 check('mid-test: disks, floppies, ROMs, battery already shown',
       'SanDisk SDCFB-8192' in m[R_C] and '7875 MB' in m[R_CGEO] and 'None' in m[R_D] and '1.44 MB' in m[R_FDD]
       and 'C000 2K' in m[R_ROMS] and 'OK' in m[R_RTC] and 'Video + System' in m[R_SHADOW], '\n'.join(m))
@@ -353,7 +358,14 @@ check('after AMI\'s own SETUP visit the countdown does not open SETUP again', r 
 
 # ---------------------------------------------------------------- floppy change line (INT 13h 15h/16h)
 # a hard disk: the change line is reported and read through port 3F7h
-q = Post(ROM, drive=(8912, 15, 63), drive_model='WDC AC24300L', cmos=make_cmos(drive=(8912, 15, 63))); q.run(max_ms=40000)
+q = Post(ROM, drive=(8912, 15, 63), drive_model='WDC AC24300L', cmos=make_cmos(drive=(8912, 15, 63)))
+snap = {}
+def cd(z):
+    if 'final' not in snap and COUNTDOWN in z.text(): snap['final'] = z.text(); snap['v'] = z._vram()
+    return False
+q.run(max_ms=40000, until=cd)
+tt = rows(snap.get('final', ''))
+check('hard disk only: no CF badge', 'WDC AC24300L' in tt[R_C] and 'CF' not in tt[R_C][:15], tt[R_C])
 x = call13(q, 0x1500, dx=0)
 check('hard disk only: INT 13h 15h reports a change line for A: (AH=02)', x['ax'] >> 8 == 2 and x['cf'] == 0, H(x))
 q.fdc_dchg = True
@@ -367,7 +379,14 @@ for label, kw in (('CF card as master', {}),
                   ('CF card as slave', dict(drive=(8912, 15, 63), drive_model='WDC AC24300L', slave=(16000, 16, 63),
                                             slave_model='SanDisk SDCFB-8192',
                                             cmos=make_cmos(drive=(8912, 15, 63), drive_d=(16000, 16, 63))))):
-    q = Post(ROM, **kw); q.run(max_ms=40000)
+    q = Post(ROM, **kw)
+    snap = {}
+    q.run(max_ms=40000, until=cd)
+    tt = rows(snap.get('final', ''))
+    cf_row, hd_row = (R_C, R_D) if 'slave' not in label else (R_D, R_C)
+    a = snap['v'][(cf_row * 80 + 11) * 2 + 1]
+    check('%s: " CF " badge on its row (title colours), none on the other' % label,
+          tt[cf_row][10:14] == ' CF ' and a == 0x30 and 'CF' not in tt[hd_row][:15], (tt[R_C], tt[R_D], hex(a)))
     x = call13(q, 0x1500, dx=0)
     check('%s: INT 13h 15h reports no change line for A: (AH=01)' % label, x['ax'] >> 8 == 1 and x['cf'] == 0
           and q.mu.mem_read(0x48F, 1)[0] & 8, H(x))

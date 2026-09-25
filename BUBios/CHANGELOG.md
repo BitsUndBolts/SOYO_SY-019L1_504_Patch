@@ -2,9 +2,18 @@
 
 BUBios grew in three steps, all in this one project: 0.1 and 1.0 replaced the setup program, 2.0 added the POST screen, and 2.1 added the boot countdown, disk auto-detection and LBA. Only the current release ROM is kept in `binary/`; the ROMs of earlier versions are in the git history.
 
+## 2.1, eighth build — 2026-09-25
+
+ROM `binary/BUBIOS2_SY019L1.BIN`, MD5 `d5894024e3665d4a426e5b7cdb47a87c`
+
+- **A " CF " badge on the POST screen for a CompactFlash card.** When IDENTIFY shows that a drive is a CF card (word 83 bit 2, or word 0 = 848Ah, the same test as in the seventh build), its model row gets a four-cell badge in the title-bar colours between the label and the model name: `Disk C:  CF  SanDisk SDCFB-8192`. It is drawn by `detect_disks` at the moment the card is recognised, so it also says that the floppy change line will be reported as "not available" (40:8F bit 3, set by `bu_final`). A hard disk gets no badge. On a monochrome adapter the badge is inverse video.
+- **Room for it:** `fill_values` cleared a field and set the value attribute with the same four instructions five times; this is now one helper, `clear_v` (clear, `goto`, `value_attr`). The screen output is identical: under the POST emulator the old and new ROM produce the same POST checkpoint sequence and the same screen at every checkpoint, apart from the badge (hard disk, CF master, CF slave, mono without disks, auto-detect with the blue scheme, cleared CMOS). The new code costs 18 bytes; the helper saves 21. About 13 bytes are left.
+- `build_bubios.py` runs NASM with relative file names, so `asm/bubios.map` no longer records the path of the machine it was built on.
+- `test_post.py`: 3 new checks, 97 in total (badge on the CF master's row, on the CF slave's row and not on the hard disk's, in the title colours; no badge with a hard disk only).
+
 ## 2.1, seventh build (release) — 2026-09-25
 
-ROM `binary/BUBIOS2_SY019L1.BIN`, MD5 `b975393064d7b8a387dd7bf6e5d32286`
+ROM MD5 `b975393064d7b8a387dd7bf6e5d32286` (the release confirmed on the board; replaced by the eighth build, which only adds the CF badge)
 
 **Confirmed on the board**:
 - the floppy directory updates after a swap with a CF card attached

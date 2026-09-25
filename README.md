@@ -8,7 +8,7 @@ The SOYO SY-019L1 (386DX-40, OPTi 82C495SLC) shipped with an AMI BIOS dated 11/1
 - **Automatic IDE detection** at every boot (a switch in setup). A drive that is configured but not connected is dropped instead of stalling POST for a minute.
 - **A full-screen POST display** with CPU, measured clock, coprocessor, cache, a live memory test, each disk's model name and geometry, ports and option ROMs, then a **3-second boot countdown** with DEL for setup. Settings changed in setup restart POST by themselves.
 - **A new setup program** in the style of MR BIOS: tabs, a Summary page, typed date and time, six colour schemes.
-- **CF-card friendly.** Fixes MS-DOS missing floppy swaps when a CF card is on the IDE bus.
+- **CF-card friendly.** Fixes MS-DOS missing floppy swaps when a CF card is on the IDE bus, and marks the card with a `CF` badge on the POST screen.
 - **A reference for modding other BIOSes.** Every changed byte is documented, the builds assert every patch site, and emulators run the real ROM's INT 13h code, setup program and complete POST. Two guides turn the work into a method you can reuse.
 
 Everything runs on the board with MS-DOS 7.1 and Windows 95 B.
@@ -21,18 +21,18 @@ Everything runs on the board with MS-DOS 7.1 and Windows 95 B.
 
 ## The ROMs
 
-**Status: complete.** Both ROMs are final and confirmed on the board.
+**Status: complete.** Both ROMs are confirmed on the board. The BUBios ROM is the eighth build of 2.1: the confirmed release plus a `CF` badge on the POST screen, which still has to be confirmed on the board.
 
 | ROM (64 KB, 27C512) | What it is | MD5 |
 |---|---|---|
-| [`BUBios/binary/BUBIOS2_SY019L1.BIN`](BUBios/README.md) | **BUBios 2.1**: everything above | `b975393064d7b8a387dd7bf6e5d32286` |
+| [`BUBios/binary/BUBIOS2_SY019L1.BIN`](BUBios/README.md) | **BUBios 2.1**: everything above | `d5894024e3665d4a426e5b7cdb47a87c` |
 | [`binary/SY019L1_27C512_CHSPATCH.BIN`](docs/HOW_THE_PATCH_WORKS.md) | **ECHS patch v5** only: disks up to 8.4 GB, original AMI screens | `8e520e91100f932d3f054883b08d37da` |
 | `binary/SY019L1_27C512_ORIGINAL.BIN` | the original AMI BIOS dump | `e80a824d8f3c39d40b98a4be5d8d9cff` |
 
 The project grew in two parts, and the repository is laid out the same way:
 
 1. **The ECHS patch** (repository root). The original goal: lift the 504 MB limit to the INT 13h CHS ceiling of 8.42 GB (7.84 GiB), without LBA and within the 64 KB EPROM. 353 bytes of new code and five small patch sites. Confirmed with an 8 GB CF card (16000/16/63 → 1002/255/63) that partitions, formats, benchmarks and boots from C:.
-2. **BUBios** ([`BUBios/`](BUBios/README.md)). Built on top of the ECHS ROM, with its disk code unchanged: the new setup, the POST screen, auto-detection and LBA. AMI's dead code (the configuration box and the low-level-format Hard Disk Utility) was removed to make room; about 10 bytes of the ROM are left.
+2. **BUBios** ([`BUBios/`](BUBios/README.md)). Built on top of the ECHS ROM, with its disk code unchanged: the new setup, the POST screen, auto-detection and LBA. AMI's dead code (the configuration box and the low-level-format Hard Disk Utility) was removed to make room; about 13 bytes of the ROM are left.
 
 ## Using the ROM
 
@@ -103,7 +103,7 @@ BUBios, from the `BUBios` folder:
 ```sh
 python3 py/build_bubios.py # builds binary/BUBIOS2_SY019L1.BIN from binary/base/
 python3 py/test_bubios.py  # 74 setup checks
-python3 py/test_post.py    # 94 checks of POST, countdown, auto-detect, LBA (25-35 minutes)
+python3 py/test_post.py    # 97 checks of POST, countdown, auto-detect, LBA (25-35 minutes)
 python3 py/regress_echs.py # the ECHS regression and boot test on the BUBios ROM
 ```
 

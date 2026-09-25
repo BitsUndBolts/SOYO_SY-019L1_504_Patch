@@ -67,6 +67,7 @@ ST_TOTAL   equ 0xF8       ; word: 64 KB blocks in total (0 = unknown)
 ST_STAT    equ 0xFA       ; word: status line text
 ST_MHZ     equ 0xFC       ; word: measured clock x10 (0 = not shown yet)
 ST_DISK    equ 0xFE       ; bit0/1: C:/D: identified, bit4/5: C:/D: absent, bit6: a CF card
+                          ; (shown as a " CF " badge, and 40:8F bit 3 at the end of POST)
 ST_MISC    equ 0xFF       ; bit0: POST time not meaningful (SETUP visited), bit1: end of POST
                           ; bit1: memory test done (say 'Disabled' for cache)
 
@@ -105,6 +106,7 @@ C_VAL      equ 15
 C_RLBL     equ 42
 C_RVAL     equ 55
 C_LBA      equ 58         ; "LBA nnnnn MB" on a disk's model row
+C_CF       equ 10         ; " CF " badge on a CF card's model row
 BAR_W      equ 40
 
 %define POS(r,c) (((r) << 8) | (c))
@@ -1156,9 +1158,7 @@ section post3 start=0x2400 vstart=0x429D
 fill_values:
     mov  dx, POS(R_SYS, C_RVAL)    ; coprocessor: probed at the end of
     mov  cx, 12                    ; POST (fpu_probe), "..." until then
-    call clear_at
-    sub  di, 24
-    call value_attr
+    call clear_v
     mov  si, s_none
     cmp  byte [ST_FPU], 0
     je   .fp
@@ -1169,9 +1169,7 @@ fill_values:
 .fp:call dots_or
     mov  dx, POS(R_SYS+1, C_VAL)   ; clock
     mov  cx, 12
-    call clear_at
-    sub  di, 24
-    call value_attr                ; (BH = attribute; AX is clobbered)
+    call clear_v                   ; (BH = attribute; AX is clobbered)
     mov  ax, [ST_MHZ]
     or   ax, ax
     jnz  .clk
@@ -1195,9 +1193,7 @@ fill_values:
 .cache:                            ; external cache (OPTi register 21h)
     mov  dx, POS(R_SYS+1, C_RVAL)
     mov  cx, 12
-    call clear_at
-    sub  di, 24
-    call value_attr
+    call clear_v
     mov  al, 0x21
     call P_CHIPRD
     test al, 0x10
@@ -1217,9 +1213,7 @@ fill_values:
 .shadow:                           ; CMOS 35h: 04h video C000, 08h system F000
     mov  dx, POS(R_SYS+2, C_RVAL)
     mov  cx, 20
-    call clear_at
-    sub  di, 40
-    call value_attr
+    call clear_v
     mov  al, 0x35
     call P_CMOSRD
     and  al, 0x0C
@@ -1252,9 +1246,7 @@ fill_values:
     ; memory test)
     mov  dx, POS(R_PORTS, C_VAL)
     mov  cx, 80 - C_VAL
-    call clear_at
-    call goto
-    call value_attr
+    call clear_v
     push di
     xor  si, si
 .port:
@@ -1327,6 +1319,12 @@ fill_values:
     jmp  pstr_v
 .done:
     ret
+
+; clear_v: CX blanks at DX, then ES:DI = DX and BH = the value attribute
+clear_v:
+    call clear_at
+    call goto
+    jmp  value_attr
 
 ; ---------------------------------------------------------------------
 ; bu_final -- replaces AMI's configuration box, last thing before INT 19h
@@ -1538,6 +1536,12 @@ detect_disks:
     cmp  word [ss:si+14], 0x848A
     jne  .ncf
 .cf:or   byte [ST_DISK], 0x40      ; (it hides the floppy change line)
+    push si                        ; and a " CF " badge between the label
+    mov  si, s_cftag               ; and the model name (DH = model row)
+    mov  dl, C_CF
+    mov  al, AT_TITLE
+    call text_at
+    pop  si
 .ncf:
     ; LBA size, if the drive has LBA and it is more than CHS reaches
     test byte [ss:si+7], 2         ; word 49 bit 9
@@ -1814,6 +1818,7 @@ s_mb:       db " MB", 0
 s_type:     db "Type ", 0
 s_auto:     db "Auto", 0
 s_lba:      db "LBA ", 0
+s_cftag:    db " CF ", 0
 s_arrow:    db " ", 0x1A, " DOS ", 0
 s_disabled: db "Disabled", 0
 s_system:   db "System", 0

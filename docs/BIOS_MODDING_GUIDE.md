@@ -62,7 +62,8 @@ hardware.
 
 A 64 KB ROM of this era has only a few KB of free space. BUBios used all
 of it and then reclaimed 4.5 KB of dead AMI code. At the end, about 10
-bytes were left.
+bytes were left; turning a repeated sequence in its own drawing code into
+a helper later gave back 21 bytes, enough for one more small feature.
 
 ### 2.1 Free blocks and where code may run
 

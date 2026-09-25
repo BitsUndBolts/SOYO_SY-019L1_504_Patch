@@ -7,7 +7,9 @@ reference for modding other legacy BIOSes.
 
 - **Start with [`Project_Overview.md`](Project_Overview.md).** Its section
   2 says which document answers which question.
-- **The ROM images are final and confirmed on hardware.** Do not modify,
+- **The ROM images are final and confirmed on hardware** (the BUBios ROM
+  is the eighth build of 2.1, which adds only the POST screen's `CF` badge
+  to the confirmed seventh build; see `BUBios/CHANGELOG.md`). Do not modify,
   rebuild over, or rename any file in `binary/`, `BUBios/binary/` or
   `BUBios/tools/*.COM` unless the user explicitly starts a new version.
   Rebuilding writes the ROM in place, so run a build only when asked to,

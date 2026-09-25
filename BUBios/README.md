@@ -10,12 +10,12 @@ BUBios is a rebuilt version of the AMI BIOS (11/11/92) of the **SOYO SY-019L1** 
 
 All of it fits in the original 64 KB EPROM (27C512). Dead AMI code was removed to make room.
 
-**Status: complete, and confirmed on the real board.** The current version is **2.1** (seventh build, the release). It was tested with 16 and 64 MB RAM, a 20 GB master and an 80 GB Samsung (auto-detect, LBA), 4 GB and 16 GB CF cards, and Windows 95 B / MS-DOS 7.1. Everything in this README runs on the board.
+**Status: complete, and confirmed on the real board.** The current version is **2.1**. The seventh build (the release, MD5 `b975393064d7b8a387dd7bf6e5d32286`, in the git history) was tested with 16 and 64 MB RAM, a 20 GB master and an 80 GB Samsung (auto-detect, LBA), 4 GB and 16 GB CF cards, and Windows 95 B / MS-DOS 7.1. The eighth build in `binary/` adds only the `CF` badge on the POST screen and still has to be confirmed on the board; everything else in this README runs on the board.
 
 | | |
 |---|---|
 | ROM image | `binary/BUBIOS2_SY019L1.BIN` (64 KB, 27C512) |
-| MD5 | `b975393064d7b8a387dd7bf6e5d32286` |
+| MD5 | `d5894024e3665d4a426e5b7cdb47a87c` (eighth build) |
 | Built from | `binary/base/SY019L1_27C512_CHSPATCH.BIN` (ECHS v5, MD5 `8e520e91100f932d3f054883b08d37da`) |
 | Version shown | 2.1 (setup title bar, Summary page, POST screen) |
 
@@ -134,7 +134,7 @@ The video card's own sign-on stays on screen for 2 s before the POST screen is d
 | Shadow RAM, RTC battery | from CMOS | at once |
 | Memory | progress bar and count in KB, updated for every 64 KB block AMI tests. Below 1 MB only the count runs; the bar starts when AMI reports the total above 1 MB (the size in CMOS may still be from before a RAM upgrade) | live |
 | Floppy A:/B: | drive types from CMOS | at once |
-| Disk C:/D: | model name read from the drive (IDENTIFY), LBA size if larger than CHS, drive type (or Auto), physical geometry, the geometry DOS sees through ECHS, size in MB | at once; a drive that is still spinning up shows `...` and is identified after the memory test |
+| Disk C:/D: | model name read from the drive (IDENTIFY), LBA size if larger than CHS, drive type (or Auto), physical geometry, the geometry DOS sees through ECHS, size in MB. A CompactFlash card gets a ` CF ` badge in the title-bar colours between the label and the model name (see [Floppy disk change](#floppy-disk-change-in-ms-dos-cf-cards-hide-it)) | at once; a drive that is still spinning up shows `...` and is identified after the memory test |
 | Ports | COM1-4 and LPT1-3 with their I/O addresses | at once: BUBios probes the ports the same way AMI does at checkpoint 9Ah (UART IIR at 3F8/2F8/3E8/2E8, printer data latch at 3BC/378/278). AMI repeats it later and the list is redrawn from its result. `None` only at the end |
 | Option ROMs | every ROM found between C000 and EFFF, with its size | at once |
 | Message rows | AMI's error messages in red, then the countdown | when needed |
@@ -246,13 +246,14 @@ It is not a BIOS fault:
 **What BUBios does: no change line while a CF card is present** (confirmed on the board: the directory updates after a swap).
 
 - At POST, BUBios recognises a CompactFlash card from its IDENTIFY data: word 83 bit 2 (CFA feature set) or word 0 = 848Ah.
+- The POST screen marks the card with a ` CF ` badge on its model row (`Disk C:  CF  SanDisk SDCFB-8192`, in the title-bar colours, inverse on a monochrome adapter). The badge means: this is a CF card, so the floppy change line is switched off. A hard disk gets no badge.
 - At the end of POST it sets a flag (bit 3 of 40:8Fh, a bit AMI never uses).
 - AMI's INT 13h AH=15h asks a stub routine (`D385`, STC/RET) whether a floppy's change line can be used. BUBios points that call at `cf_chgline`, which answers "no" when the flag is set, so AH=15h returns AH=01 (drive without change line).
 - DOS then does what it always did for drives without a change line: after 2 seconds without access it reads the boot sector again and compares the volume serial number, so a swapped disk is noticed.
 - With hard disks only, nothing changes (AH=02; the fast change line is used).
 - **Limits:**
   - Two disks with the same serial number (copies of one image) still look alike to DOS.
-  - A CF card that is neither set up nor found by auto-detect is not asked for IDENTIFY, so it is not recognised.
+  - A CF card that is neither set up nor found by auto-detect is not asked for IDENTIFY, so it is not recognised (and has no badge).
   - A card that reports neither signature is not recognised either.
   - In both cases, add `DRIVPARM=/D:0 /F:7` to CONFIG.SYS. It does the same by hand: `/F:7` means a 1.44 MB drive, and the missing `/C` means "no change line".
 - Selecting a different IDE device before reading 3F7h does not help: the S key in `DSKCHG` never made the line appear.
@@ -369,7 +370,7 @@ The build script checks the MD5 of every removed range before clearing it, and o
 | `mem` | `4EAA-4ED1` | the 40 bytes of AMI's old memory-count print that are jumped over |
 | `wait` | `76AC-76B8` | AMI's unused "WAIT......" text |
 
-**Space left:** about 10 bytes, in small gaps.
+**Space left:** about 13 bytes, in small gaps.
 
 ## Build and test
 
@@ -378,10 +379,14 @@ Run these from this folder. You need NASM, Python 3 and `pip install unicorn pil
 ```
 python3 py/build_bubios.py     # builds binary/BUBIOS2_SY019L1.BIN from binary/base/ and prints its MD5
 python3 py/test_bubios.py      # 74 checks of the setup
-python3 py/test_post.py        # 94 checks of POST, countdown, setup visits, auto-detect, LBA, floppy change line (25-35 minutes)
+python3 py/test_post.py        # 97 checks of POST, countdown, setup visits, auto-detect, LBA, floppy change line (25-35 minutes)
 python3 py/regress_echs.py     # ECHS INT 13h regression + INT 19h boot test on this ROM
 python3 py/shots.py            # setup screenshots into shots/
+nasm -f bin tools/dskchg.asm -o tools/DSKCHG.COM      # the DOS change-line tester (byte-identical)
+nasm -f bin asm/lba_test_mbr.asm -o lba_test_mbr.bin  # the LBA test boot sector (scratch disks only)
 ```
+
+`shots.py` rewrites the PNGs even when nothing changed on screen (the PNG encoding depends on the Pillow version); check the difference before committing them.
 
 **Build checks.** `build_bubios.py` checks the MD5 of the input ROM, the original bytes at every patch site, every AMI string and option record it reuses, the MD5 of every dead-code range before clearing it and of every kept neighbour afterwards, that every free block is empty, that the code and data fit their blocks, and the final checksum.
 
@@ -406,7 +411,7 @@ python3 py/shots.py            # setup screenshots into shots/
   - colour cycling and loading defaults
   - typing the date and time: full fields, 2-digit years, invalid values, Backspace, ESC, and committing with Tab or an arrow key
   - the Tools page's auto-detect switch and its CMOS bytes
-- `test_post.py` (94 checks):
+- `test_post.py` (97 checks):
   - the screen in the normal case, and the early fields during the memory test
   - the countdown: 3 s, any key boots, DEL runs setup, a save restarts POST, setup visits before and during the countdown
   - the cleared screen and normal colours for DOS
@@ -416,7 +421,7 @@ python3 py/shots.py            # setup screenshots into shots/
   - that the interrupt flag is still off after the POST screen's early work
   - the colour schemes, monochrome and the chime
   - the INT 13h extensions: 41h, 48h, 42h and 43h above 8.4 GB, read-back, verify, seek, errors (past the end of the disk, more than 127 sectors, a missing drive), and the classic CHS read and AH=08h, unchanged
-  - the floppy change line through INT 13h 15h/16h with a hard disk, a CF master and a CF slave
+  - the floppy change line through INT 13h 15h/16h with a hard disk, a CF master and a CF slave, and the ` CF ` badge on the card's row (none for a hard disk)
   - that the POST checkpoint sequence is identical to BUBios 1.0 (the setup-only version). This one check needs the 1.0 ROM, which is no longer in the repository, and is skipped without it. To run it, restore the ROM from git history: `git show 0ccbeb2:BUBios/binary/BUBIOS_SY019L1.BIN > binary/BUBIOS_SY019L1.BIN` (MD5 `087565a6ba5e86a058275965c6bdca60`).
 - `regress_echs.py`: all 10 ECHS geometries and all 5 INT 19h boot cases pass, exactly as with the ECHS ROM.
 
@@ -441,9 +446,9 @@ python3 py/shots.py            # setup screenshots into shots/
 
 ## Picking this up again
 
-The project is complete. All reported bugs are closed and confirmed on the board with the seventh build of 2.1 (see [CHANGELOG.md](CHANGELOG.md)).
+The project is complete. All reported bugs are closed and confirmed on the board with the seventh build of 2.1 (see [CHANGELOG.md](CHANGELOG.md)). The eighth build only adds the `CF` badge; confirm it on the board with a CF card and with a hard disk only.
 
-- **Space:** the ROM is practically full (about 10 bytes left in small gaps; `py/build_bubios.py` prints them). New features need space reclaimed first. Candidates: AMI texts that are no longer printed; check every reference, including `push imm16`.
+- **Space:** the ROM is practically full (about 13 bytes left in small gaps; `py/build_bubios.py` prints them). New features need space reclaimed first. Candidates: AMI texts that are no longer printed (check every reference, including `push imm16`), and repeated instruction sequences in BUBios's own code that can become a helper (the eighth build found 21 bytes that way in `fill_values`).
 - **Testing:** `py/test_post.py` takes 25-35 minutes. Stop any stray 86Box processes first; they slow it down a lot.
 - **Traps** (details in [How it works](#how-it-works)):
   - interrupts are off in early POST
@@ -461,7 +466,7 @@ asm/
   bubios.lst, bubios.map    NASM listing and section map (regenerated by the build)
   lba_test_mbr.asm          boot sector that tests the INT 13h extensions
 binary/
-  BUBIOS2_SY019L1.BIN       the BUBios ROM (flash this)   MD5 b975393064d7b8a387dd7bf6e5d32286
+  BUBIOS2_SY019L1.BIN       the BUBios ROM (flash this)   MD5 d5894024e3665d4a426e5b7cdb47a87c
   base/                     copies of the original and ECHS ROMs the build starts from
 py/
   build_bubios.py           assemble + patch + checksum -> binary/BUBIOS2_SY019L1.BIN

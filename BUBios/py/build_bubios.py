@@ -37,8 +37,9 @@ if hashlib.md5(rom).hexdigest() != ECHS_MD5:
     die('input is not the hardware-confirmed ECHS ROM (%s)' % SRC)
 
 # ------------------------------------------------------------------ assemble
-subprocess.run(['nasm', '-f', 'bin', ASM, '-o', BIN, '-l', LST],
-               check=True, cwd=os.path.dirname(ASM))
+subprocess.run(['nasm', '-f', 'bin', os.path.basename(ASM), '-o', os.path.basename(BIN),
+                '-l', os.path.basename(LST)],        # relative names: the map file
+               check=True, cwd=os.path.dirname(ASM))  # carries no machine-specific path
 blob = open(BIN, 'rb').read()
 mp = open(MAP).read()
 sec = {m.group(5): (int(m.group(1), 16), int(m.group(2), 16), int(m.group(4), 16))
