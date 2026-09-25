@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BUBios for the SOYO SY-019L1</title>
+<meta name="description" content="A rebuilt 1992 AMI BIOS for the SOYO SY-019L1 386 board: from a 504 MB disk limit to 128 GB with LBA, auto-detect, a POST screen and a new setup. Explainer, ROM downloads and documentation.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='7' y='4' width='18' height='24' rx='2' fill='%23121923' stroke='%23ff9f43' stroke-width='2'/%3E%3Cg stroke='%234cc9f0' stroke-width='2'%3E%3Cpath d='M2 9h5M2 14h5M2 19h5M2 24h5M25 9h5M25 14h5M25 19h5M25 24h5'/%3E%3C/g%3E%3C/svg%3E">
+<style>
+:root{
+  --bg:#0b0f16; --panel:#121923; --panel2:#18212d; --line:#253041; --line2:#34425a;
+  --text:#e8eef6; --muted:#8d9aae; --dim:#5b677a;
+  --cyl:#ff9f43; --head:#4cc9f0; --sec:#c792ea;
+  --ok:#5dd39e; --warn:#ffd166; --err:#ff5d73;
+  --sans:"Inter","Segoe UI",system-ui,-apple-system,Roboto,sans-serif;
+  --mono:"JetBrains Mono","Cascadia Code","Consolas","SF Mono","Menlo",monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{background:var(--bg);scroll-behavior:smooth}
+body{font-family:var(--sans);color:var(--text);background:var(--bg);line-height:1.5;-webkit-font-smoothing:antialiased}
+a{color:var(--head);text-decoration:none}
+a:hover{text-decoration:underline}
+img{display:block;max-width:100%}
+.wrap{max-width:1080px;margin:0 auto;padding:0 16px}
+.mono{font-family:var(--mono)}
+.c{color:var(--cyl)} .h{color:var(--head)} .s{color:var(--sec)} .ok{color:var(--ok)} .err{color:var(--err)} .mut{color:var(--muted)}
+.tag{font:700 12px var(--mono);letter-spacing:2.5px;text-transform:uppercase;color:var(--muted)}
+section{padding:44px 0 8px}
+h2{font-size:26px;font-weight:800;letter-spacing:-.3px;margin:6px 0 18px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:16px}
+
+/* header */
+header{border-bottom:1px solid var(--line)}
+.top{display:flex;align-items:center;justify-content:space-between;gap:8px 16px;padding-top:14px;padding-bottom:14px;flex-wrap:wrap}
+.brand{font:700 13px var(--mono);letter-spacing:2px;text-transform:uppercase;color:var(--muted)}
+.toplinks{display:flex;gap:18px;font-size:15px;font-weight:600}
+.toplinks a{color:var(--muted)}
+.toplinks a:hover{color:var(--text);text-decoration:none}
+
+.hero{padding:48px 0 12px;display:grid;grid-template-columns:1.05fr 1fr;gap:36px;align-items:center}
+h1{font-size:52px;font-weight:900;letter-spacing:-1.5px;line-height:1.05}
+h1 span{color:var(--muted);font-weight:700;display:block;font-size:24px;letter-spacing:-.3px;margin-top:8px}
+.lead{font-size:18px;color:var(--muted);margin-top:18px;max-width:34em}
+.lead b{color:var(--text);font-weight:650}
+.jump{display:flex;gap:10px;flex-wrap:wrap;margin-top:24px}
+.btn{display:inline-flex;align-items:center;gap:8px;font-weight:700;font-size:15px;padding:11px 18px;border-radius:10px;border:1px solid var(--line2);background:var(--panel2);color:var(--text)}
+.btn:hover{text-decoration:none;border-color:var(--muted)}
+.btn.pri{background:var(--cyl);border-color:var(--cyl);color:#1a1006}
+.btn.pri:hover{filter:brightness(1.08)}
+.btn.sm{font-size:14px;padding:8px 14px}
+.shot{border-radius:12px;overflow:hidden;border:1px solid var(--line2);background:#000;box-shadow:0 20px 60px -30px #000}
+.shot img{width:100%;height:auto}
+
+/* explainer */
+.explainer{display:grid;grid-template-columns:1fr auto;gap:24px;align-items:center;padding:28px 30px;
+  background:linear-gradient(135deg,rgba(255,159,67,.10),rgba(76,201,240,.06) 55%,rgba(199,146,234,.08)),var(--panel);border-color:var(--line2)}
+.explainer h3{font-size:24px;font-weight:800;letter-spacing:-.3px}
+.explainer h3 em{font-style:normal;color:var(--err)}
+.explainer p{color:var(--muted);margin-top:6px;max-width:40em}
+.eq{font:700 20px var(--mono);margin-top:14px;display:flex;flex-wrap:wrap;gap:6px 10px;align-items:baseline}
+.eq .x{color:var(--dim)}
+.eq .r{color:var(--err)}
+.eq small{font:500 12px var(--mono);color:var(--muted);display:block}
+.eq .t{display:inline-flex;flex-direction:column}
+.note{font-size:13px;color:var(--dim);margin-top:10px}
+
+/* downloads */
+.roms{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+.rom{padding:22px 22px 20px;display:flex;flex-direction:column;gap:10px}
+.rom.rec{border-color:var(--ok);box-shadow:0 0 40px -22px var(--ok)}
+.rom .badge{align-self:flex-start;font:700 11px var(--mono);letter-spacing:1.5px;text-transform:uppercase;padding:4px 9px;border-radius:99px;border:1px solid var(--line2);color:var(--muted)}
+.rom.rec .badge{color:var(--ok);border-color:var(--ok);background:rgba(93,211,158,.1)}
+.rom h3{font-size:21px;font-weight:800}
+.rom p{color:var(--muted);font-size:15px;flex:1}
+.meta{font:500 12px var(--mono);color:var(--muted);border-top:1px solid var(--line);padding-top:10px;word-break:break-all}
+.meta b{color:var(--text);font-weight:600;word-break:break-all}
+.rom .acts{display:flex;gap:8px;flex-wrap:wrap}
+.rom.rec .btn.dl{background:var(--ok);border-color:var(--ok);color:#06140d}
+.warnbar{margin-top:16px;display:flex;gap:14px;align-items:flex-start;padding:14px 18px;border-radius:12px;border:1.5px solid var(--warn);background:rgba(255,209,102,.07);font-size:15px}
+.warnbar .ic{flex:0 0 26px;height:26px;border-radius:50%;background:var(--warn);color:#0b0f16;font:900 16px var(--sans);display:flex;align-items:center;justify-content:center}
+.warnbar b{color:var(--warn)}
+.extra{margin-top:12px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;padding:14px 18px;font-size:15px}
+.extra .mut{font-size:14px}
+
+/* screenshots */
+.gallery{display:grid;grid-template-columns:repeat(2,1fr);gap:16px}
+figure{margin:0}
+figcaption{font-size:14px;color:var(--muted);margin-top:8px}
+.more{margin-top:14px;font-size:15px}
+
+/* reading */
+.cols{display:grid;grid-template-columns:repeat(2,1fr);gap:16px}
+.list{padding:8px 0}
+.list h3{font:700 12px var(--mono);letter-spacing:2px;text-transform:uppercase;color:var(--muted);padding:14px 22px 6px}
+.list a{display:flex;justify-content:space-between;align-items:baseline;gap:14px;padding:11px 22px;border-top:1px solid var(--line);color:var(--text)}
+.list h3 + a{border-top:0}
+.list a:hover{background:var(--panel2);text-decoration:none}
+.list a span{font-weight:650}
+.list a small{color:var(--muted);font-size:13px;text-align:right}
+
+footer{margin-top:52px;border-top:1px solid var(--line);padding:24px 0 40px;font-size:13px;color:var(--dim)}
+footer p + p{margin-top:6px}
+footer a{color:var(--muted)}
+
+@media (max-width:860px){
+  .hero{grid-template-columns:1fr;padding-top:32px}
+  h1{font-size:40px}
+  .roms{grid-template-columns:1fr}
+  .explainer{grid-template-columns:1fr}
+  .cols,.gallery{grid-template-columns:1fr}
+}
+@media (max-width:480px){
+  .toplinks{gap:12px;font-size:14px}
+  .explainer{padding:22px 18px}
+  .eq{font-size:17px}
+  .list a{flex-direction:column;gap:2px}
+  .list a small{text-align:left}
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap top">
+    <div class="brand">Bits und Bolts · SOYO SY-019L1</div>
+    <nav class="toplinks">
+      <a href="#explainer">Explainer</a>
+      <a href="#downloads">Downloads</a>
+      <a href="#docs">Docs</a>
+      <a href="https://github.com/BitsUndBolts/SOYO_SY-019L1_504_Patch">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <div class="hero">
+    <div>
+      <h1>BUBios <span>for the SOYO SY-019L1 386 board</span></h1>
+      <p class="lead">A 1992 AMI BIOS that stopped at <b>504&nbsp;MB</b>, rebuilt to reach <b>128&nbsp;GB</b> with LBA. It adds automatic IDE detection, a full-screen POST display and a new setup program, all inside the original 64&nbsp;KB EPROM. Confirmed on real hardware.</p>
+      <div class="jump">
+        <a class="btn pri" href="chs-504mib-explainer.html">Open the 504&nbsp;MiB explainer →</a>
+        <a class="btn" href="#downloads">Download the ROMs</a>
+      </div>
+    </div>
+    <div class="shot">
+      <img src="https://raw.githubusercontent.com/BitsUndBolts/SOYO_SY-019L1_504_Patch/main/BUBios/shots/post_2_ready.png" alt="BUBios POST screen counting down to the boot" width="750" height="417">
+    </div>
+  </div>
+
+  <section id="explainer">
+    <div class="tag">From the video</div>
+    <h2>Interactive explainer</h2>
+    <div class="card explainer">
+      <div>
+        <h3>The <em>504&nbsp;MiB</em> Barrier</h3>
+        <p>Why legacy BIOSes couldn't see more of an IDE drive, and how ECHS translation broke through. Step through it, or try your own drive geometry.</p>
+        <div class="eq" aria-label="1024 cylinders times 16 heads times 63 sectors times 512 bytes equals 504 MiB">
+          <span class="t c">1024<small>cylinders</small></span><span class="x">×</span>
+          <span class="t h">16<small>heads</small></span><span class="x">×</span>
+          <span class="t s">63<small>sectors</small></span><span class="x">×</span>
+          <span class="t">512<small>bytes</small></span><span class="x">=</span>
+          <span class="t r">504 MiB</span>
+        </div>
+        <p class="note">Made for a large screen. Use it full screen on a desktop.</p>
+      </div>
+      <a class="btn pri" href="chs-504mib-explainer.html">Open explainer →</a>
+    </div>
+  </section>
+
+  <section id="downloads">
+    <div class="tag">ROM images · 64 KB · 27C512 EPROM</div>
+    <h2>Downloads</h2>
+    <div class="roms">
+      <div class="card rom rec">
+        <span class="badge">Recommended</span>
+        <h3>BUBios 2.1</h3>
+        <p>Everything: LBA up to 128&nbsp;GB, auto-detect, POST screen with boot countdown, new setup.</p>
+        <div class="meta">BUBIOS2_SY019L1.BIN<br>MD5 <b>b975393064d7b8a387dd7bf6e5d32286</b></div>
+        <div class="acts">
+          <a class="btn sm dl" href="https://github.com/BitsUndBolts/SOYO_SY-019L1_504_Patch/raw/main/BUBios/binary/BUBIOS2_SY019L1.BIN" download>Download</a>
+          <a class="btn sm" href="https://github.com/BitsUndBolts/SOYO_SY-019L1_504_Patch/blob/main/BUBios/README.md">Details</a>
+        </div>
+      </div>
+      <div class="card rom">
+        <span class="badge">Large-disk patch only</span>
+        <h3>ECHS patch v5</h3>
+        <p>Just the 504&nbsp;MB fix: disks up to 8.4&nbsp;GB, with the original AMI screens.</p>
+        <div class="meta">SY019L1_27C512_CHSPATCH.BIN<br>MD5 <b>8e520e91100f932d3f054883b08d37da</b></div>
+        <div class="acts">
+          <a class="btn sm dl" href="https://github.com/BitsUndBolts/SOYO_SY-019L1_504_Patch/raw/main/binary/SY019L1_27C512_CHSPATCH.BIN" download>Download</a>
+          <a class="btn sm" href="https://github.com/BitsUndBolts/SOYO_SY-019L1_504_Patch/blob/main/docs/HOW_THE_PATCH_WORKS.md">Details</a>
+        </div>
+      </div>
+      <div class="card rom">
+        <span class="badge">Unmodified</span>
+        <h3>Original AMI BIOS</h3>
+        <p>The stock AMI BIOS dated 11/11/92, to go back to or to start your own mod.</p>
+        <div class="meta">SY019L1_27C512_ORIGINAL.BIN<br>MD5 <b>e80a824d8f3c39d40b98a4be5d8d9cff</b></div>
+        <div class="acts">
+          <a class="btn sm dl" href="https://github.com/BitsUndBolts/SOYO_SY-019L1_504_Patch/raw/main/binary/SY019L1_27C512_ORIGINAL.BIN" download>Download</a>
+          <a class="btn sm" href="https://github.com/BitsUndBolts/SOYO_SY-019L1_504_Patch/blob/main/docs/BIOS_ADDRESS_MAP.md">Address map</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="warnbar">
+      <span class="ic">!</span>
+      <div><b>Keep your original chip.</b> This BIOS has no recovery block. Before you flash, read <a href="https://github.com/BitsUndBolts/SOYO_SY-019L1_504_Patch#using-the-rom">Using the ROM</a>: existing partitions on large drives may need to be recreated.</div>
+    </div>
+
+    <div class="card extra">
+      <div><b>DSKCHG.COM</b> <span class="mut">· DOS tool that shows the floppy change line live (408 bytes)</span></div>
+      <a class="btn sm" href="https://github.com/BitsUndBolts/SOYO_SY-019L1_504_Patch/raw/main/BUBios/tools/DSKCHG.COM" download>Download</a>
+    </div>
+  </section>
+
+  <section id="screens">
+    <div class="tag">Screenshots</div>
+    <h2>Before and after</h2>
+    <div class="gallery">
+      <figure>
+        <div class="shot"><img loading="lazy" src="https://raw.githubusercontent.com/BitsUndBolts/SOYO_SY-019L1_504_Patch/main/BUBios/shots/0_original_main.png" alt="Original AMI setup main menu" width="1440" height="960"></div>
+        <figcaption>The original AMI setup</figcaption>
+      </figure>
+      <figure>
+        <div class="shot"><img loading="lazy" src="https://raw.githubusercontent.com/BitsUndBolts/SOYO_SY-019L1_504_Patch/main/BUBios/shots/1_summary.png" alt="BUBios setup Summary page" width="1440" height="960"></div>
+        <figcaption>BUBios setup: Summary page with physical and translated disk geometry</figcaption>
+      </figure>
+      <figure>
+        <div class="shot"><img loading="lazy" src="https://raw.githubusercontent.com/BitsUndBolts/SOYO_SY-019L1_504_Patch/main/BUBios/shots/post_1_memory_test.png" alt="BUBios POST screen during the memory test" width="750" height="417"></div>
+        <figcaption>POST screen during the memory test</figcaption>
+      </figure>
+      <figure>
+        <div class="shot"><img loading="lazy" src="https://raw.githubusercontent.com/BitsUndBolts/SOYO_SY-019L1_504_Patch/main/BUBios/shots/post_6_auto_lba.png" alt="BUBios POST screen with an auto-detected 19.6 GB disk using LBA" width="750" height="417"></div>
+        <figcaption>Auto-detect and LBA: a 19.6&nbsp;GB disk that was not set up in CMOS</figcaption>
+      </figure>
+    </div>
+    <p class="more"><a href="https://github.com/BitsUndBolts/SOYO_SY-019L1_504_Patch/tree/main/BUBios/shots">All screenshots →</a></p>
+  </section>
+
+  <section id="docs">
+    <div class="tag">Documentation</div>
+    <h2>Read more</h2>
+    <div class="cols">
+      <div class="card list">
+        <h3>The project</h3>
+        <a href="https://github.com/BitsUndBolts/SOYO_SY-019L1_504_Patch#readme"><span>Project README</span><small>overview, using the ROM</small></a>
+        <a href="https://github.com/BitsUndBolts/SOYO_SY-019L1_504_Patch/blob/main/BUBios/README.md"><span>BUBios in detail</span><small>every feature, every hook</small></a>
+        <a href="https://github.com/BitsUndBolts/SOYO_SY-019L1_504_Patch/blob/main/BUBios/CHANGELOG.md"><span>BUBios changelog</span><small>build by build</small></a>
+        <a href="https://github.com/BitsUndBolts/SOYO_SY-019L1_504_Patch/blob/main/CHANGELOG.md"><span>ECHS patch changelog</span><small>v1 → v5</small></a>
+        <a href="https://github.com/BitsUndBolts/SOYO_SY-019L1_504_Patch/blob/main/docs/BIOS_Evaluation.md"><span>ECHS development log</span><small>six bugs and how they were found</small></a>
+      </div>
+      <div class="card list">
+        <h3>For BIOS modders</h3>
+        <a href="https://github.com/BitsUndBolts/SOYO_SY-019L1_504_Patch/blob/main/docs/HOW_THE_PATCH_WORKS.md"><span>How the ECHS patch works</span><small>every changed byte</small></a>
+        <a href="https://github.com/BitsUndBolts/SOYO_SY-019L1_504_Patch/blob/main/docs/CHS_TRANSLATION_PORTING_GUIDE.md"><span>CHS translation porting guide</span><small>fix the 504 MB limit elsewhere</small></a>
+        <a href="https://github.com/BitsUndBolts/SOYO_SY-019L1_504_Patch/blob/main/docs/BIOS_MODDING_GUIDE.md"><span>BIOS modding guide</span><small>LBA, POST screen, setup</small></a>
+        <a href="https://github.com/BitsUndBolts/SOYO_SY-019L1_504_Patch/blob/main/docs/BIOS_ADDRESS_MAP.md"><span>ROM address map</span><small>AMI 11/11/92, OPTi 495SLC</small></a>
+        <a href="https://github.com/BitsUndBolts/SOYO_SY-019L1_504_Patch"><span>Source code</span><small>NASM, Python build and emulators</small></a>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <p>BUBios by Bits und Bolts. Sources, scripts and documentation: MIT License.</p>
+    <p>The ROM images contain AMI BIOS code, © American Megatrends Inc. They are provided for the preservation and repair of this board only.</p>
+  </div>
+</footer>
+
+</body>
+</html>
