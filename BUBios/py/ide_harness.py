@@ -1,5 +1,5 @@
 """ide_harness.py -- Unicorn-based real-mode harness for the SY-019L1 ROM.
-(Copy of the parent project's py/ide_harness.py; here PATCHED_ROM is BUBios 2.0.)
+(Copy of the ECHS project's py/ide_harness.py; here PATCHED_ROM is the BUBios ROM.)
 Runs real INT 13h calls through the genuine dispatcher against either ROM,
 with a simulated IDE drive (optionally backed by sector images), CMOS reads,
 software-interrupt dispatch via the IVT, IDE register/LBA logging, and a

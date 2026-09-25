@@ -1,11 +1,10 @@
 # Changelog
 
-This repository has three parts. This file covers the first one, the ECHS
-large-disk patch. The other two have their own changelogs:
+This repository has two parts, each with its own changelog:
 
-- the setup UI built on top of it: [`BUBios/CHANGELOG.md`](BUBios/CHANGELOG.md)
-- BUBios 2.x (POST screen, auto-detect, LBA):
-  [`BUBios 2.0/CHANGELOG.md`](BUBios%202.0/CHANGELOG.md)
+- **The ECHS large-disk patch** (repository root): this file.
+- **BUBios** (setup, POST screen, auto-detection, LBA), built on top of it:
+  [`BUBios/CHANGELOG.md`](BUBios/CHANGELOG.md).
 
 ## ECHS large-disk patch
 
@@ -19,10 +18,13 @@ Confirmed on the board:
   and a full-surface benchmark all work, and the board boots from C:.
 - WD Caviar 24300 and a 2 GB SanDisk CF card work unchanged.
 
+BUBios uses this ROM as its base and leaves its disk code byte-identical.
+
 ### Development history (v1 → v5)
 
-Six bugs were found and fixed on the way to v5. `BIOS_Evaluation.md`
-§3–§8 describes each one with its symptom and diagnosis.
+Only v5 is in the repository. Six bugs were found and fixed on the way to
+it. [`docs/BIOS_Evaluation.md`](docs/BIOS_Evaluation.md) §3–§7 describes
+each one with its symptom and diagnosis.
 
 1. `xlate_getparams` lost DX across `calc_factor`, so AH=08h always
    reported 1023 cylinders.
@@ -40,5 +42,5 @@ Six bugs were found and fixed on the way to v5. `BIOS_Evaluation.md`
    writing fixed disk" on 8 GB cards and some geometries to hang. The
    head ladder now ends at 255.
 
-`CHS_TRANSLATION_PORTING_GUIDE.md` turns these lessons into a method that
-can be reused on other BIOSes.
+[`docs/CHS_TRANSLATION_PORTING_GUIDE.md`](docs/CHS_TRANSLATION_PORTING_GUIDE.md)
+turns these lessons into a method that can be reused on other BIOSes.

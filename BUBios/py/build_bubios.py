@@ -2,7 +2,7 @@
 """
 Build the BUBios 2.1 ROM on top of the hardware-confirmed ECHS ROM.
 
-    python3 py/build_bubios.py        (from the BUBios 2.0 folder; needs NASM)
+    python3 py/build_bubios.py        (from the BUBios folder; needs NASM)
 
 Input : binary/base/SY019L1_27C512_CHSPATCH.BIN  (the ECHS ROM, MD5 checked)
 Output: binary/BUBIOS2_SY019L1.BIN
@@ -45,7 +45,7 @@ sec = {m.group(5): (int(m.group(1), 16), int(m.group(2), 16), int(m.group(4), 16
        for m in re.finditer(r'^\s*([0-9A-F]+)\s+([0-9A-F]+)\s+([0-9A-F]+)\s+([0-9A-F]+)\s+progbits\s+(\w+)', mp, re.M)}
 sym = {m.group(2): int(m.group(1), 16)
        for m in re.finditer(r'^\s+[0-9A-F]+\s+([0-9A-F]+)\s+(\w+)\s*$', mp, re.M)}
-# ---- BUBios 2.0: space reclaimed from dead AMI code (see README) ----------
+# ---- space reclaimed from dead AMI code since 2.0 (see README) ------------
 # AMI's configuration box (replaced by the POST screen), minus the shared
 # CR/LF routine at 3B84-3B8E, and the Hard Disk Utility (format /
 # interleave / media analysis / bad-track editor, unreachable since 1.0),

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Run the ECHS INT 13h regression (regress.py) and the INT 19h boot test
-(boot_test.py) of the parent project against the BUBios 2.0 ROM, to show
+(boot_test.py) of the ECHS project (repository root) against the BUBios ROM, to show
 that the disk code of the hardware-confirmed ECHS ROM still behaves
 identically.  Copies of both scripts and of ide_harness.py are in this
 folder, so it runs on its own.

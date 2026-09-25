@@ -4,7 +4,7 @@ Behavioural checks of the BUBios 2.1 POST screen, the boot countdown, disk
 auto-detection and the INT 13h extensions, run in the POST emulator
 (post_emu.py: the whole power-on self test from the reset vector).
 
-    python3 py/test_post.py        (from the BUBios 2.0 folder; needs unicorn)
+    python3 py/test_post.py        (from the BUBios folder; needs unicorn)
 
 The emulated CPU is a modern x86 core, so the Processor/Clock values are not
 checked here (86Box, and the real board, show 80386 / 40.0 MHz).
@@ -17,7 +17,10 @@ from int13x import call13, dap
 
 ROOT = os.path.dirname(HERE)
 ROM = open(os.path.join(ROOT, 'binary', 'BUBIOS2_SY019L1.BIN'), 'rb').read()
-ROM10 = os.path.join(ROOT, '..', 'BUBios', 'binary', 'BUBIOS_SY019L1.BIN')
+# BUBios 1.0 (setup only), for the POST checkpoint comparison. It is no longer
+# in the repository; the check is skipped unless it is restored with
+#   git show 0ccbeb2:BUBios/binary/BUBIOS_SY019L1.BIN > binary/BUBIOS_SY019L1.BIN
+ROM10 = os.path.join(ROOT, 'binary', 'BUBIOS_SY019L1.BIN')
 MAP = open(os.path.join(ROOT, 'asm', 'bubios.map')).read()
 SYM = {m.group(2): int(m.group(1), 16)
        for m in re.finditer(r'^\s+[0-9A-F]+\s+([0-9A-F]+)\s+([\w.]+)\s*$', MAP, re.M)}

@@ -1,5 +1,5 @@
-Soyo 386 AMI BIOS — Hard Disk Size Limit: Findings & Patch Design
-=================================================================
+ECHS Patch — Development Log: Findings, Bugs and Fixes
+=======================================================
 
 **ROM:** 64 KB, AMI BIOS dated **11/11/92**. **Mapped at:** segment `F000`.
 **Original MD5:** `e80a824d8f3c39d40b98a4be5d8d9cff`.
@@ -12,8 +12,11 @@ Soyo 386 AMI BIOS — Hard Disk Size Limit: Findings & Patch Design
 > later ruled out. Everything marked as open in §5–§7 was resolved by v5 (§8).
 > The "open problem" in §5 was solved in §6. Only the
 > final version (v5) is included in this repository — earlier ROMs,
-> sources and scripts were omitted for clarity. Script names in the log
-> refer to the development-time files; their final equivalents are:
+> sources and scripts were omitted for clarity. This log covers the ECHS
+> large-disk patch only; the BUBios history is in
+> [`BUBios/CHANGELOG.md`](../BUBios/CHANGELOG.md). Paths are relative to
+> the repository root. Script names in the log refer to the
+> development-time files; their final equivalents are:
 >
 > | In this log | In the repository |
 > |---|---|
@@ -26,23 +29,27 @@ Soyo 386 AMI BIOS — Hard Disk Size Limit: Findings & Patch Design
 
 ---
 
-1. Root cause (unchanged)
---------------------------
+1. Root cause
+-------------
 
 Raw CHS pass-through, no translation. `AH=08h` clamps cylinders to
 `0x3FF` (correct per spec) but the head field gets masked to 4 bits
 (`AND DH,0Fh`) with nothing converting between logical and physical CHS.
 Ceiling: 1024 × 16 × 63 × 512 = 504 MiB.
 
-2. Patch design (unchanged)
-----------------------------
+2. Patch design
+---------------
 
-Three new routines spliced into free space at `0x76F5` (294 bytes):
-`calc_factor`, `xlate_getparams`, `xlate_headcyl`. Five call sites hooked:
-`0xA659` (AH=08h body), `0xA965` (shared head-byte builder), and three
-duplicated cylinder-high-byte port-write sites (`0xA60F`, `0xA7EB`,
-`0xAB3E`). Full addresses and the INT13h dispatch table: see
-`BIOS_ADDRESS_MAP.md`.
+Three new routines spliced into free space at `0x76F5`: `calc_factor`,
+`xlate_getparams`, `xlate_headcyl` (353 bytes in the final v5; the v3
+design described in §3-§5 was 294 bytes). Five call sites are hooked in
+the final ROM: `0xA659-0xA685` (AH=08h body), `0xA965` (shared head-byte
+builder), and the three duplicated cylinder-high-byte builders before
+`OUT 1F5h` (`0xA60E`, `0xA7EA`, `0xAB3D`), plus a checksum word at
+`0x7900`. Every changed byte is explained in
+[`HOW_THE_PATCH_WORKS.md`](HOW_THE_PATCH_WORKS.md); the INT 13h dispatch
+table and the other addresses are in
+[`BIOS_ADDRESS_MAP.md`](BIOS_ADDRESS_MAP.md).
 
 3. Bug #1 (found and fixed): `xlate_getparams` DX-clobber
 -----------------------------------------------------------
@@ -336,4 +343,6 @@ error (CMOS 0Eh bit 3 makes the ROM skip booting from C: silently),
 (4) try a different card/adapter, and only then (5) suspect the patch.
 
 The reusable write-up of the whole method — including the pitfalls behind
-bugs #1-#6 — is in `CHS_TRANSLATION_PORTING_GUIDE.md`.
+bugs #1-#6 — is in [`CHS_TRANSLATION_PORTING_GUIDE.md`](CHS_TRANSLATION_PORTING_GUIDE.md).
+The next stage, LBA through the INT 13h extensions, was done in BUBios
+(see [`BIOS_MODDING_GUIDE.md`](BIOS_MODDING_GUIDE.md) §6).

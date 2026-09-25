@@ -1,0 +1,784 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The 504 MiB Barrier</title>
+<style>
+:root{
+  --bg:#0b0f16; --panel:#121923; --panel2:#18212d; --line:#253041; --line2:#34425a;
+  --text:#e8eef6; --muted:#8d9aae; --dim:#5b677a;
+  --cyl:#ff9f43; --head:#4cc9f0; --sec:#c792ea; --ctl:#3a4557;
+  --ok:#5dd39e; --warn:#ffd166; --err:#ff5d73;
+  --sans:"Inter","Segoe UI",system-ui,-apple-system,Roboto,sans-serif;
+  --mono:"JetBrains Mono","Cascadia Code","Consolas","SF Mono","Menlo",monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;background:#05070b;overflow:hidden}
+body{font-family:var(--sans);color:var(--text);-webkit-font-smoothing:antialiased}
+button{font-family:inherit;cursor:pointer}
+.c{color:var(--cyl)} .h{color:var(--head)} .s{color:var(--sec)} .okc{color:var(--ok)} .errc{color:var(--err)} .warnc{color:var(--warn)} .mut{color:var(--muted)}
+.mono{font-family:var(--mono)}
+
+#stage{position:absolute;left:0;top:0;width:2560px;height:1440px;background:var(--bg);transform-origin:0 0;overflow:hidden}
+
+/* ---------- header ---------- */
+.top{position:absolute;left:0;top:0;width:2560px;height:110px;display:flex;align-items:center;justify-content:space-between;padding:0 60px;border-bottom:1px solid var(--line)}
+.t1{font-size:42px;font-weight:800;letter-spacing:-.5px}
+.t1 em{font-style:normal;color:var(--err)}
+.t2{font-size:21px;color:var(--muted);margin-top:4px}
+.tabs{display:flex;gap:12px}
+.tabs button{font-weight:650;font-size:23px;color:var(--muted);background:transparent;border:1px solid var(--line);padding:14px 28px;border-radius:12px;display:flex;align-items:center}
+.tabs button.on{background:var(--panel2);color:var(--text);border-color:var(--line2)}
+.k{display:inline-block;font:600 15px var(--mono);border:1px solid currentColor;border-radius:6px;padding:2px 8px;margin-right:12px;opacity:.7}
+
+.screen{position:absolute;left:0;top:110px;width:2560px;height:1330px;display:none}
+.screen.on{display:block}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:20px;position:relative}
+.tag{font:700 15px var(--mono);letter-spacing:2.5px;text-transform:uppercase;color:var(--muted)}
+
+/* ---------- bit cells ---------- */
+.f-c{--fc:var(--cyl)} .f-h{--fc:var(--head)} .f-s{--fc:var(--sec)} .f-x{--fc:var(--ctl)}
+.bit{width:72px;height:58px;border-radius:10px;display:flex;align-items:center;justify-content:center;font:700 20px var(--mono);
+  border:2px solid var(--fc);color:var(--fc);background:color-mix(in srgb,var(--fc) 13%,transparent);transition:all .35s ease}
+.bit.f-x{color:var(--muted);background:transparent}
+.bit.sm{font-size:15px}
+.bit.hi{background:color-mix(in srgb,var(--fc) 32%,transparent);box-shadow:0 0 0 2px var(--fc),0 0 30px -4px var(--fc);color:#fff}
+.bit.dim{opacity:.15}
+.bit.wasted{opacity:.6;border-style:dashed;border-color:var(--err);color:var(--err);
+  background:repeating-linear-gradient(135deg,rgba(255,93,115,.25) 0 6px,transparent 6px 14px)}
+.bit.xlat{border-color:var(--cyl);color:#fff;background:linear-gradient(135deg,rgba(76,201,240,.45) 0 50%,rgba(255,159,67,.45) 50% 100%)}
+
+/* ---------- explanation ---------- */
+.flow{position:absolute;left:60px;top:30px;width:2440px;height:620px;display:flex}
+.iface{width:960px;padding:30px 40px}
+.iface h2{font-size:40px;font-weight:800;margin:6px 0 22px;letter-spacing:-.3px}
+.iface h2 span{font:500 20px var(--mono);color:var(--muted);margin-left:14px;letter-spacing:0}
+.reg{display:flex;align-items:center;margin-bottom:12px}
+.rname{width:190px}
+.rname b{font:700 26px var(--mono)}
+.rname small{display:block;font-size:16px;color:var(--muted);margin-top:2px}
+.bits{display:flex;gap:6px}
+.dims{display:flex;gap:14px;margin-top:20px}
+.chip{flex:1;border-radius:12px;padding:10px 16px;border:1px solid var(--line);background:var(--panel2);transition:all .35s}
+.chip .l{font-size:17px;font-weight:700;color:var(--fc)}
+.chip .v{font:600 23px var(--mono);margin-top:2px}
+.chip .v small{font-size:16px;color:var(--muted)}
+.chip.hi{border-color:var(--fc);box-shadow:0 0 24px -6px var(--fc)}
+.chip.dim{opacity:.2}
+.chip.wasted{border-color:var(--err);border-style:dashed}
+.chip.wasted .v{color:var(--err);text-decoration:line-through;text-decoration-thickness:2px}
+.maxline{margin-top:16px;font:500 21px var(--mono);color:var(--muted)}
+.maxline b{color:var(--text)}
+.cardnote{margin-top:10px;font-size:19px;font-weight:600;min-height:26px;transition:opacity .3s}
+
+.bioswrap{width:520px;position:relative;display:flex;align-items:center;justify-content:center}
+.wire{position:absolute;top:50%;height:4px;background:var(--line2);width:70px}
+.wire.l{left:0} .wire.r{right:0}
+.wire.r::after,.wire.l::after{content:"";position:absolute;right:-2px;top:-9px;border:11px solid transparent;border-left:14px solid var(--line2);border-right:0}
+.wlabel{position:absolute;top:calc(50% - 40px);font:600 15px var(--mono);color:var(--muted);width:70px;text-align:center}
+.wlabel.l{left:0} .wlabel.r{right:0}
+.biosbox{width:360px;padding:30px 28px;border-radius:20px;border:2px solid var(--line2);background:var(--panel2);text-align:center;transition:all .4s}
+.biosbox .big{font-size:54px;font-weight:900;letter-spacing:2px;margin:4px 0 12px}
+.pill{display:inline-block;font:700 17px var(--sans);padding:6px 16px;border-radius:99px;border:1.5px solid var(--line2);color:var(--muted)}
+.pill.okp{color:var(--ok);border-color:var(--ok);background:rgba(93,211,158,.1)}
+.pill.errp{color:var(--err);border-color:var(--err);background:rgba(255,93,115,.1)}
+.pill.warnp{color:var(--warn);border-color:var(--warn);background:rgba(255,209,102,.1)}
+.biosbox ul{list-style:none;text-align:left;margin-top:22px;font:600 20px var(--mono);line-height:1.9}
+.biosbox .foot{margin-top:14px;font-size:18px;color:var(--muted)}
+.biosbox.echs{border-color:var(--ok);box-shadow:0 0 40px -12px var(--ok)}
+
+.lower{position:absolute;left:60px;top:680px;width:2440px;height:480px}
+.scene{position:absolute;inset:0;display:flex;gap:40px;transition:opacity .45s}
+.scene.off{opacity:0;pointer-events:none}
+
+.tcard{width:1480px;padding:26px 40px}
+.trow{display:grid;grid-template-columns:270px 270px 270px 300px 1fr;align-items:center;min-height:82px;border-bottom:1px solid var(--line);transition:opacity .4s}
+.trow.head{min-height:48px;font:700 15px var(--mono);letter-spacing:2px;text-transform:uppercase;color:var(--muted)}
+.trow.pend{opacity:.1}
+.trow:last-child{border-bottom:0}
+.trow.cap{border-top:2px solid var(--line2)}
+.dname{font-size:28px;font-weight:750;display:flex;align-items:center;gap:14px}
+.sw{width:16px;height:16px;border-radius:4px;background:var(--fc)}
+.val{font:700 34px var(--mono)}
+.val small{display:block;font:500 16px var(--mono);color:var(--muted);margin-top:2px}
+.val.lose{color:var(--dim)}
+.val.win{color:var(--fc)}
+.val.big{font-size:42px}
+.bn{display:inline-block;font:700 18px var(--mono);padding:7px 16px;border-radius:10px;border:1.5px solid var(--err);color:var(--err);background:rgba(255,93,115,.08)}
+
+.rcard{flex:1;padding:30px 40px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center}
+.rcard .eq{font:700 40px var(--mono)}
+.rcard .bytes{font:500 26px var(--mono);color:var(--muted);margin-top:10px}
+.rcard .huge{font-size:128px;font-weight:900;line-height:1.05;margin-top:10px;letter-spacing:-2px;color:var(--err)}
+.rcard .huge small{font-size:34px;color:var(--muted);font-weight:600;letter-spacing:0;margin-left:10px}
+.rcard .note{font-size:23px;color:var(--muted);margin-top:14px}
+.rcard .ph{font-size:140px;font-weight:900;color:var(--line2)}
+.reveal{transition:opacity .45s}
+.reveal.off{opacity:0}
+
+.xcard{width:1400px;padding:26px 40px}
+.xcard h3,.ccard h3{font-size:30px;font-weight:800}
+.xcard h3 span,.ccard h3 span{font-size:20px;font-weight:500;color:var(--muted);margin-left:12px}
+.georow{display:flex;align-items:center;gap:24px;margin-top:18px}
+.geo{flex:1;background:var(--panel2);border:1px solid var(--line);border-radius:16px;padding:14px 22px}
+.geo .l{font-size:17px;color:var(--muted);font-weight:650}
+.geo .g{font:800 44px var(--mono);margin-top:4px}
+.geo .f{font:500 17px var(--mono);color:var(--muted);margin-top:2px}
+.xarrow{text-align:center;font:700 21px var(--mono);line-height:1.5}
+.xarrow .a{font-size:40px;color:var(--muted);line-height:1}
+.ftab{display:grid;grid-template-columns:320px repeat(5,1fr);margin-top:18px;font:600 20px var(--mono);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.ftab div{padding:8px 14px;border-bottom:1px solid var(--line);text-align:center}
+.ftab div.lh{text-align:left;font-family:var(--sans);font-weight:650;color:var(--muted);font-size:18px}
+.ftab div.sel{background:rgba(93,211,158,.13);color:#fff}
+.ftab div.selh{background:rgba(93,211,158,.22);color:var(--ok)}
+.ftab div:nth-last-child(-n+6){border-bottom:0}
+.formula{margin-top:16px;font:600 20px var(--mono);color:var(--muted)}
+.formula b{color:var(--text)}
+
+.ccard{flex:1;padding:26px 40px}
+.ccard .eq{font:700 34px var(--mono);margin-top:16px}
+.ccard .bytes{font:500 21px var(--mono);color:var(--muted);margin-top:4px}
+.ccard .huge{font-size:84px;font-weight:900;color:var(--ok);line-height:1.1;margin-top:4px}
+.ccard .huge small{font-size:28px;color:var(--muted);font-weight:600;margin-left:8px}
+.cmp{margin-top:10px}
+.cmp .row{display:flex;align-items:center;gap:14px;margin-top:8px;font:600 18px var(--mono)}
+.cmp .row .lab{width:120px;color:var(--muted)}
+.cmp .row .bar{height:24px;border-radius:6px}
+.cnote{font-size:18px;color:var(--muted);margin-top:14px;line-height:1.45}
+.cnote b{color:var(--text)}
+
+.capbar{position:absolute;left:60px;top:1190px;width:2440px;height:110px;display:flex;align-items:center;gap:30px;padding:0 30px;background:var(--panel);border:1px solid var(--line);border-radius:20px}
+.stepno{font:700 22px var(--mono);color:var(--muted);width:90px}
+.captxt{flex:1;font-size:29px;line-height:1.35;font-weight:500}
+.captxt b{font-weight:800}
+.dots{display:flex;gap:10px}
+.dots span{width:16px;height:16px;border-radius:50%;background:var(--line2);cursor:pointer}
+.dots span.on{background:var(--text)}
+.nav button{font-size:22px;font-weight:700;padding:14px 24px;border-radius:12px;border:1px solid var(--line2);background:var(--panel2);color:var(--text);margin-left:10px}
+.nav button:disabled{opacity:.3}
+.hint{font:500 15px var(--mono);color:var(--dim);position:absolute;right:62px;top:1308px}
+
+/* ---------- simulator ---------- */
+.simL{position:absolute;left:60px;top:30px;width:640px;height:1270px;display:flex;flex-direction:column;gap:22px}
+.simR{position:absolute;left:740px;top:30px;width:1760px;height:1270px;display:flex;flex-direction:column;gap:22px}
+.pcard{padding:24px 30px}
+.pcard h3{font-size:28px;font-weight:800;margin-top:4px}
+.pcard h3 span{font-size:18px;color:var(--muted);font-weight:500;margin-left:8px}
+.geoin{display:flex;align-items:flex-end;gap:8px;margin-top:18px}
+.fld{flex:1}
+.fld.wide{flex:1.35}
+.fld label{display:block;font-weight:750;font-size:19px;color:var(--fc)}
+.fld label small{display:block;color:var(--muted);font:500 14px var(--mono);margin:2px 0 6px}
+.fld input{width:100%;font:800 42px var(--mono);background:#0a0f16;border:2px solid color-mix(in srgb,var(--fc) 55%,transparent);color:var(--text);border-radius:12px;padding:8px 12px;outline:none}
+.fld input::-webkit-inner-spin-button,.fld input::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
+.fld input{-moz-appearance:textfield;appearance:textfield}
+.fld input:focus{border-color:var(--fc);box-shadow:0 0 22px -6px var(--fc)}
+.fld input.bad{border-color:var(--err);color:var(--err)}
+.times{font:600 34px var(--mono);color:var(--muted);padding-bottom:14px}
+.presets{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:18px}
+.presets button{background:var(--panel2);border:1px solid var(--line);border-radius:10px;color:var(--text);padding:8px 6px;font-weight:700;font-size:18px;line-height:1.2}
+.presets button small{display:block;font:500 13px var(--mono);color:var(--muted);margin-top:2px}
+.presets button.on{border-color:var(--text);background:#223044}
+.capline{margin-top:18px;display:flex;align-items:baseline;gap:14px;flex-wrap:wrap}
+.capline .l{font-size:18px;color:var(--muted)}
+.capline .v{font:800 30px var(--mono)}
+.capline .d{font:500 16px var(--mono);color:var(--muted)}
+
+input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:36px;background:transparent;margin-top:14px}
+input[type=range]::-webkit-slider-runnable-track{height:10px;border-radius:5px;background:var(--line2)}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:30px;height:30px;border-radius:50%;background:var(--text);margin-top:-10px;border:4px solid var(--bg);box-shadow:0 0 0 2px var(--text)}
+input[type=range]::-moz-range-track{height:10px;border-radius:5px;background:var(--line2)}
+input[type=range]::-moz-range-thumb{width:24px;height:24px;border-radius:50%;background:var(--text);border:4px solid var(--bg)}
+.tread{display:flex;align-items:baseline;gap:18px;margin-top:8px;flex-wrap:wrap}
+.tread .lba{font:800 28px var(--mono)}
+.tread .chs{font:700 24px var(--mono)}
+.tread .off{font:500 17px var(--mono);color:var(--muted)}
+.quick{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:16px}
+.quick button{background:var(--panel2);border:1px solid var(--line);border-radius:10px;color:var(--text);padding:10px 6px;font-weight:650;font-size:16px;line-height:1.2}
+.quick button:disabled{opacity:.3}
+
+.warns{flex:1;display:flex;flex-direction:column;gap:10px;overflow:hidden}
+.warn{display:flex;gap:14px;padding:12px 18px;border-radius:14px;border:1.5px solid var(--wc);background:color-mix(in srgb,var(--wc) 9%,transparent)}
+.warn.w{--wc:var(--warn)} .warn.e{--wc:var(--err)} .warn.o{--wc:var(--ok)} .warn.i{--wc:var(--head)}
+.warn .ic{flex:0 0 38px;height:38px;border-radius:50%;background:var(--wc);color:#0b0f16;font:900 24px var(--sans);display:flex;align-items:center;justify-content:center}
+.warn .wt{font-size:21px;font-weight:800;color:var(--wc)}
+.warn .wx{font-size:16px;color:#c9d3e0;margin-top:3px;line-height:1.4}
+
+.mapcard{height:196px;padding:20px 30px}
+.maphead{display:flex;justify-content:space-between;align-items:baseline}
+.maphead h3{font-size:24px;font-weight:800}
+.maphead .lg{font-size:16px;color:var(--muted);display:flex;gap:22px;align-items:center}
+.lg i{display:inline-block;width:14px;height:14px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+.tracks{position:relative;margin-top:14px}
+.track{display:flex;align-items:center;gap:16px;height:44px;margin-bottom:8px}
+.track .tl{width:150px;font-size:19px;font-weight:700}
+.track .tb{position:relative;width:1300px;height:30px;border-radius:7px;overflow:hidden;
+  background:repeating-linear-gradient(135deg,rgba(255,93,115,.28) 0 7px,rgba(255,93,115,.08) 7px 16px);border:1px solid rgba(255,93,115,.4)}
+.track .fill{position:absolute;left:0;top:0;bottom:0;background:var(--ok);transition:width .3s}
+.track .tv{font:600 17px var(--mono);color:var(--muted);flex:1;white-space:nowrap}
+.marker{position:absolute;top:-8px;bottom:-4px;width:3px;background:#fff;box-shadow:0 0 10px #fff;transition:left .15s}
+.marker span{position:absolute;top:-22px;left:50%;transform:translateX(-50%);font:700 13px var(--mono);color:#fff;white-space:nowrap}
+
+.lane{flex:1;padding:20px 28px}
+.lhead{display:flex;align-items:center;gap:30px;height:74px}
+.lhead .ti{width:560px}
+.lhead .ti b{font-size:28px;font-weight:800;display:block}
+.lhead .ti span{font-size:18px;color:var(--muted)}
+.lhead .sees{flex:1}
+.lhead .sees .l{font-size:15px;color:var(--muted);font-weight:650;text-transform:uppercase;letter-spacing:1.5px}
+.lhead .sees .g{font:800 34px var(--mono)}
+.lhead .usable{text-align:right}
+.lhead .usable .u{font:800 30px var(--mono)}
+.lhead .usable .u small{font-size:18px;color:var(--muted);font-weight:500}
+.badge{display:inline-block;font:800 15px var(--sans);letter-spacing:1.2px;padding:5px 12px;border-radius:8px;margin-top:4px;text-transform:uppercase}
+.badge.okb{background:rgba(93,211,158,.15);color:var(--ok)}
+.badge.wb{background:rgba(255,209,102,.15);color:var(--warn)}
+.badge.eb{background:rgba(255,93,115,.15);color:var(--err)}
+.pipe{display:flex;margin-top:14px;height:336px}
+.pbox{background:var(--panel2);border:1px solid var(--line);border-radius:16px;padding:16px 20px;transition:opacity .25s}
+.pbox.off{opacity:.25}
+.pbox.dos{width:450px} .pbox.bios{width:330px} .pbox.ata{width:480px} .pbox.drv{width:290px}
+.pbox .ph{font:700 14px var(--mono);letter-spacing:2px;text-transform:uppercase;color:var(--muted);margin-bottom:10px}
+.parrow{width:36px;display:flex;align-items:center;justify-content:center;font-size:30px;color:var(--dim)}
+.sreg{display:flex;align-items:center;gap:10px;margin:7px 0}
+.sname{width:58px;font:700 20px var(--mono)}
+.pbox.ata .sname{width:66px}
+.sbits{display:flex;gap:3px}
+.sbit{width:32px;height:38px;border-radius:6px;display:flex;align-items:center;justify-content:center;font:700 18px var(--mono);
+  border:1.5px solid color-mix(in srgb,var(--fc) 60%,transparent);color:color-mix(in srgb,var(--fc) 55%,transparent)}
+.sbit.one{background:var(--fc);border-color:var(--fc);color:#0b0f16}
+.sbit.f-x{border-color:#3a4557;color:#5b677a}
+.sbit.f-x.one{background:#4b576b;color:#dfe6ee;border-color:#4b576b}
+.shex{width:52px;text-align:right;font:600 19px var(--mono);color:var(--muted)}
+.dec{margin-top:12px;font:700 22px var(--mono);padding-top:10px;border-top:1px solid var(--line)}
+.blocked{display:flex;flex-direction:column;justify-content:center;height:270px}
+.blocked .x{font-size:30px;font-weight:900;color:var(--err)}
+.blocked .why{font-size:21px;line-height:1.45;margin-top:12px;color:#d5dde8}
+.blocked .req{font:700 22px var(--mono);margin-top:14px}
+.bios .mode{font-size:22px;font-weight:800}
+.bios ul{list-style:none;margin-top:12px;font:600 18px var(--mono);line-height:1.85}
+.bios .fn{font-size:16px;color:var(--muted);margin-top:10px;line-height:1.4}
+.drv .big{font:800 26px var(--mono);line-height:1.6}
+.drv .lbal{font:500 17px var(--mono);color:var(--muted);margin-top:8px}
+.drv .okt{margin-top:14px;font-weight:800;font-size:20px;color:var(--ok)}
+</style>
+</head>
+<body>
+<div id="stage">
+  <header class="top">
+    <div>
+      <div class="t1">The <em>504 MiB</em> Barrier</div>
+      <div class="t2">Why legacy BIOSes couldn't see more of an IDE drive — and how ECHS translation broke through</div>
+    </div>
+    <nav class="tabs">
+      <button data-tab="explain" class="on"><span class="k">1</span>Explanation</button>
+      <button data-tab="sim"><span class="k">2</span>Simulator</button>
+    </nav>
+  </header>
+
+  <!-- ================= EXPLANATION ================= -->
+  <section id="explain" class="screen on">
+    <div class="flow">
+      <div class="card iface" id="card-int13">
+        <div class="tag">Software side · DOS → BIOS</div>
+        <h2>INT 13h <span>AH=02h · read sectors</span></h2>
+        <div id="regs-int13"></div>
+        <div class="dims">
+          <div class="chip f-c" data-f="c"><div class="l">Cylinders</div><div class="v">1024 <small>10 bits</small></div></div>
+          <div class="chip f-h" data-f="h"><div class="l">Heads</div><div class="v">256 <small>8 bits</small></div></div>
+          <div class="chip f-s" data-f="s"><div class="l">Sectors</div><div class="v">63 <small>6 bits · 1–63</small></div></div>
+        </div>
+        <div class="maxline">max <span class="c">1024</span> × <span class="h">256</span> × <span class="s">63</span> × 512 B = <b>7.88 GiB</b> (8.46 GB)</div>
+        <div class="cardnote" id="note-int13"></div>
+      </div>
+
+      <div class="bioswrap">
+        <div class="wlabel l">C·H·S</div><div class="wire l"></div>
+        <div class="biosbox" id="biosbox"></div>
+        <div class="wlabel r">C·H·S</div><div class="wire r"></div>
+      </div>
+
+      <div class="card iface" id="card-ata">
+        <div class="tag">Hardware side · BIOS → drive</div>
+        <h2>ATA / IDE task file <span>ports 1F3h–1F6h</span></h2>
+        <div id="regs-ata"></div>
+        <div class="dims">
+          <div class="chip f-c" data-f="c"><div class="l">Cylinders</div><div class="v">65,536 <small>16 bits</small></div></div>
+          <div class="chip f-h" data-f="h"><div class="l">Heads</div><div class="v">16 <small>4 bits</small></div></div>
+          <div class="chip f-s" data-f="s"><div class="l">Sectors</div><div class="v">255 <small>8 bits · 1–255</small></div></div>
+        </div>
+        <div class="maxline">max <span class="c">65,536</span> × <span class="h">16</span> × <span class="s">255</span> × 512 B = <b>136.9 GB</b> (127.5 GiB)</div>
+        <div class="cardnote" id="note-ata"></div>
+      </div>
+    </div>
+
+    <div class="lower">
+      <!-- scene A: the intersection -->
+      <div class="scene" id="sceneA">
+        <div class="card tcard">
+          <div class="trow head"><div>Dimension</div><div>INT 13h carries</div><div>ATA carries</div><div>Straight through</div><div>Bottleneck</div></div>
+          <div class="trow f-c pend" data-row="1">
+            <div class="dname"><i class="sw"></i>Cylinders</div>
+            <div class="val win">1024<small>10 bits</small></div>
+            <div class="val lose">65,536<small>16 bits</small></div>
+            <div class="val win big">1024</div>
+            <div><span class="bn">INT 13h</span></div>
+          </div>
+          <div class="trow f-h pend" data-row="2">
+            <div class="dname"><i class="sw"></i>Heads</div>
+            <div class="val lose">256<small>8 bits</small></div>
+            <div class="val win">16<small>4 bits</small></div>
+            <div class="val win big">16</div>
+            <div><span class="bn">ATA</span></div>
+          </div>
+          <div class="trow f-s pend" data-row="3">
+            <div class="dname"><i class="sw"></i>Sectors</div>
+            <div class="val win">63<small>6 bits · 1–63</small></div>
+            <div class="val lose">255<small>8 bits · 1–255</small></div>
+            <div class="val win big">63</div>
+            <div><span class="bn">INT 13h</span></div>
+          </div>
+          <div class="trow cap pend" data-row="4">
+            <div class="dname">Capacity</div>
+            <div class="val">7.88 GiB<small>8.46 GB</small></div>
+            <div class="val">136.9 GB<small>127.5 GiB</small></div>
+            <div class="val big errc">504 MiB</div>
+            <div class="mut" style="font-size:20px">the intersection</div>
+          </div>
+        </div>
+        <div class="card rcard">
+          <div class="ph" id="resPh">?</div>
+          <div class="reveal off" id="resBody" style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center">
+            <div class="eq"><span class="c">1024</span> × <span class="h">16</span> × <span class="s">63</span> × 512 B</div>
+            <div class="bytes">= 528,482,304 bytes</div>
+            <div class="huge">504 MiB<small>(528 MB)</small></div>
+            <div class="note">Nothing is broken — there is simply <b style="color:var(--text)">no translation layer</b>.</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- scene B: ECHS -->
+      <div class="scene off" id="sceneB">
+        <div class="card xcard">
+          <h3>ECHS / “Large” translation <span>example: a 2.1 GB drive</span></h3>
+          <div class="georow">
+            <div class="geo">
+              <div class="l">Drive reports (physical, ATA)</div>
+              <div class="g"><span class="c">4092</span> × <span class="h">16</span> × <span class="s">63</span></div>
+              <div class="f">4092 cylinders won't fit in 10 bits</div>
+            </div>
+            <div class="xarrow"><div class="c">cyl ÷ 4</div><div class="a">⇄</div><div class="h">heads × 4</div></div>
+            <div class="geo" style="border-color:var(--ok)">
+              <div class="l">BIOS reports to DOS (logical, INT 13h)</div>
+              <div class="g"><span class="c">1023</span> × <span class="h">64</span> × <span class="s">63</span></div>
+              <div class="f">same 2.11 GB — now fits INT 13h</div>
+            </div>
+          </div>
+          <div class="ftab">
+            <div class="lh">Physical cylinders</div><div>≤ 1024</div><div>≤ 2048</div><div class="selh">≤ 4096</div><div>≤ 8192</div><div>≤ 16384</div>
+            <div class="lh">Factor N</div><div>×1</div><div>×2</div><div class="sel">×4</div><div>×8</div><div>×16</div>
+            <div class="lh">Logical heads (16·N)</div><div>16</div><div>32</div><div class="sel">64</div><div>128</div><div>256</div>
+          </div>
+          <div class="formula">Every request: <b>C<sub>phys</sub> = C<sub>DOS</sub> × N + ⌊H<sub>DOS</sub> ÷ 16⌋</b> · <b>H<sub>phys</sub> = H<sub>DOS</sub> mod 16</b> · <b>S unchanged</b></div>
+        </div>
+        <div class="card ccard reveal off" id="ceil">
+          <h3>The new ceiling <span>every INT 13h bit is now used</span></h3>
+          <div class="eq"><span class="c">1024</span> × <span class="h">256</span> × <span class="s">63</span> × 512 B</div>
+          <div class="bytes">= 8,455,716,864 bytes</div>
+          <div class="huge">7.88 GiB<small>(8.46 GB)</small></div>
+          <div class="cmp">
+            <div class="row"><span class="lab">no xlat</span><span class="bar" style="width:52px;background:var(--err)"></span><span class="errc">504 MiB</span></div>
+            <div class="row"><span class="lab">ECHS</span><span class="bar" style="width:640px;background:var(--ok)"></span><span class="okc">16×</span></div>
+          </div>
+          <div class="cnote">Next wall: <b>INT 13h itself</b> → LBA + INT 13h Extensions.<br>MS-DOS / Win9x can't handle 256 heads, so real BIOSes reported ≤ 255 (often 240).</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="capbar">
+      <div class="stepno" id="stepno">1 / 7</div>
+      <div class="captxt" id="captxt"></div>
+      <div class="dots" id="dots"></div>
+      <div class="nav"><button id="prev">←</button><button id="next">Next →</button></div>
+    </div>
+    <div class="hint">← → step · 1 / 2 switch screen · F fullscreen</div>
+  </section>
+
+  <!-- ================= SIMULATOR ================= -->
+  <section id="sim" class="screen">
+    <div class="simL">
+      <div class="card pcard">
+        <div class="tag">Step 1 · The drive</div>
+        <h3>Physical geometry <span>as reported by ATA IDENTIFY</span></h3>
+        <div class="geoin">
+          <div class="fld wide f-c"><label>Cylinders<small>ATA 1–65535</small></label><input id="inC" type="number" min="1" max="65535"></div>
+          <div class="times">×</div>
+          <div class="fld f-h"><label>Heads<small>ATA 1–16</small></label><input id="inH" type="number" min="1" max="16"></div>
+          <div class="times">×</div>
+          <div class="fld f-s"><label>Sectors<small>ATA 1–255</small></label><input id="inS" type="number" min="1" max="255"></div>
+        </div>
+        <div class="presets" id="presets"></div>
+        <div class="capline"><span class="l">Drive capacity</span><span class="v" id="capV"></span><span class="d" id="capD"></span></div>
+      </div>
+
+      <div class="card pcard">
+        <div class="tag">Step 2 · The request</div>
+        <h3>Which sector does DOS want?</h3>
+        <input type="range" id="inT" min="0" max="100" step="1">
+        <div class="tread"><span class="lba" id="tLba"></span><span class="chs" id="tChs"></span><span class="off" id="tOff"></span></div>
+        <div class="quick">
+          <button id="qFirst">First sector</button>
+          <button id="qLeg">Last one below 1024 cyl</button>
+          <button id="qPast">Cylinder 1024</button>
+          <button id="qEnd">Last sector</button>
+        </div>
+      </div>
+
+      <div class="warns" id="warns"></div>
+    </div>
+
+    <div class="simR">
+      <div class="card mapcard">
+        <div class="maphead">
+          <h3>What each BIOS can reach on this drive</h3>
+          <div class="lg"><span><i style="background:var(--ok)"></i>reachable via INT 13h</span><span><i style="background:rgba(255,93,115,.5)"></i>invisible to DOS</span><span><i style="background:#fff"></i>requested sector</span></div>
+        </div>
+        <div class="tracks" id="tracks">
+          <div class="track"><div class="tl">Legacy</div><div class="tb"><div class="fill" id="fillL"></div></div><div class="tv" id="tvL"></div></div>
+          <div class="track"><div class="tl okc">ECHS</div><div class="tb"><div class="fill" id="fillE"></div></div><div class="tv" id="tvE"></div></div>
+          <div class="marker" id="marker"><span>target</span></div>
+        </div>
+      </div>
+      <div class="card lane" id="laneL"></div>
+      <div class="card lane" id="laneE"></div>
+    </div>
+  </section>
+</div>
+
+<script>
+(() => {
+/* ---------- scaling to a 2560×1440 stage ---------- */
+const stage = document.getElementById('stage');
+function fit(){
+  const s = Math.min(innerWidth/2560, innerHeight/1440);
+  stage.style.transform = `translate(${(innerWidth-2560*s)/2}px,${(innerHeight-1440*s)/2}px) scale(${s})`;
+}
+addEventListener('resize', fit); fit();
+
+/* ---------- helpers ---------- */
+const $ = id => document.getElementById(id);
+const nf = n => n.toLocaleString('en-US');
+function fx(x){ if (Math.abs(x-Math.round(x)) < 0.005) return String(Math.round(x)); return x>=100 ? x.toFixed(1) : x>=10 ? x.toFixed(1) : x.toFixed(2); }
+function bin(b){ if(b>=2**30) return fx(b/2**30)+' GiB'; if(b>=2**20) return fx(b/2**20)+' MiB'; return fx(b/1024)+' KiB'; }
+function dec(b){ if(b>=1e9) return fx(b/1e9)+' GB'; if(b>=1e6) return fx(b/1e6)+' MB'; return fx(b/1e3)+' kB'; }
+const bitsFor = n => n<=0 ? 1 : Math.floor(Math.log2(n))+1;
+const R = (f,hi,lo) => { const a=[]; for(let i=hi;i>=lo;i--) a.push([f,i]); return a; };
+const hex2 = v => v.toString(16).toUpperCase().padStart(2,'0')+'h';
+
+const INT13 = [
+  {n:'CH', d:'cylinder bits 7–0', b:R('c',7,0)},
+  {n:'CL', d:'cyl 9–8 · sector 5–0', b:[...R('c',9,8),...R('s',5,0)]},
+  {n:'DH', d:'head', b:R('h',7,0)},
+];
+const ATA = [
+  {n:'1F3h', d:'sector number', b:R('s',7,0)},
+  {n:'1F4h', d:'cylinder low', b:R('c',7,0)},
+  {n:'1F5h', d:'cylinder high', b:R('c',15,8)},
+  {n:'1F6h', d:'drive / head', b:[['x','1'],['x','L'],['x','1'],['x','DRV'],...R('h',3,0)]},
+];
+
+/* ---------- tabs ---------- */
+function showTab(t){
+  document.querySelectorAll('.tabs button').forEach(b=>b.classList.toggle('on', b.dataset.tab===t));
+  document.querySelectorAll('.screen').forEach(s=>s.classList.toggle('on', s.id===t));
+}
+document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>showTab(b.dataset.tab));
+
+/* =================== EXPLANATION =================== */
+function drawExplainRegs(defs, el, side){
+  el.innerHTML = defs.map(r=>`<div class="reg"><div class="rname"><b>${r.n}</b><small>${r.d}</small></div><div class="bits">${
+    r.b.map(([f,i])=>{ const lab = f==='x' ? i : f.toUpperCase()+i;
+      return `<div class="bit f-${f}${lab.length>2?' sm':''}" data-side="${side}" data-f="${f}" data-i="${i}">${lab}</div>`; }).join('')
+  }</div></div>`).join('');
+}
+drawExplainRegs(INT13, $('regs-int13'), 'int13');
+drawExplainRegs(ATA, $('regs-ata'), 'ata');
+
+const STEPS = [
+  `Two CHS interfaces meet inside the BIOS: <b>INT 13h</b> towards DOS, the <b>ATA task file</b> towards the drive. Each has its own field widths.`,
+  `<b class="c">Cylinders:</b> INT 13h has 10 bits (<b class="c">1024</b>), the task file has 16 bits (65,536). Passed straight through, the smaller one wins → <b class="c">1024</b>.`,
+  `<b class="h">Heads:</b> INT 13h has 8 bits (256), the task file only 4 bits (<b class="h">16</b>). This time the hardware side is the bottleneck → <b class="h">16</b>.`,
+  `<b class="s">Sectors:</b> INT 13h has 6 bits (<b class="s">1–63</b>), the task file 8 bits (1–255). The software side wins again → <b class="s">63</b>.`,
+  `Without translation only the intersection is addressable: <b class="c">1024</b> × <b class="h">16</b> × <b class="s">63</b> × 512 = <b class="errc">504 MiB</b>. The hatched bits on each side are simply wasted.`,
+  `<b class="okc">ECHS (“Large” mode)</b> adds the missing translation layer: the BIOS divides cylinders and multiplies heads by the same power of two, so the geometry DOS sees fits INT 13h.`,
+  `The spare head bits now carry cylinder bits: <b class="c">1024</b> × <b class="h">256</b> × <b class="s">63</b> × 512 = <b class="okc">7.88 GiB</b> — 16× more. The next wall is INT 13h itself.`,
+];
+let step = 0;
+const dotsEl = $('dots');
+dotsEl.innerHTML = STEPS.map((_,i)=>`<span data-i="${i}"></span>`).join('');
+dotsEl.querySelectorAll('span').forEach(d=>d.onclick=()=>setStep(+d.dataset.i));
+
+function bitState(side,f,i,n){
+  i = +i;
+  if (n>=1 && n<=3){ const want = ['c','h','s'][n-1]; return f===want ? 'hi' : 'dim'; }
+  if (n===4){
+    if (side==='int13' && f==='h' && i>=4) return 'wasted';
+    if (side==='ata' && f==='c' && i>=10) return 'wasted';
+    if (side==='ata' && f==='s' && i>=6) return 'wasted';
+  }
+  if (n>=5){
+    if (side==='int13' && f==='h' && i>=4) return 'xlat';
+    if (side==='ata' && f==='c' && i>=14) return 'wasted';
+    if (side==='ata' && f==='s' && i>=6) return 'wasted';
+  }
+  return '';
+}
+function setStep(n){
+  step = Math.max(0, Math.min(STEPS.length-1, n));
+  document.querySelectorAll('#explain .bit').forEach(b=>{
+    b.classList.remove('hi','dim','wasted','xlat');
+    const s = bitState(b.dataset.side,b.dataset.f,b.dataset.i,step);
+    if (s) b.classList.add(s);
+  });
+  document.querySelectorAll('#explain .chip').forEach(c=>{
+    c.classList.remove('hi','dim','wasted');
+    const side = c.closest('#card-int13') ? 'int13' : 'ata', f = c.dataset.f;
+    if (step>=1 && step<=3) c.classList.add(f===['c','h','s'][step-1] ? 'hi' : 'dim');
+    if (step===4 && ((side==='int13'&&f==='h') || (side==='ata'&&f!=='h'))) c.classList.add('wasted');
+  });
+  document.querySelectorAll('#sceneA .trow[data-row]').forEach(r=>r.classList.toggle('pend', +r.dataset.row > step));
+  $('resBody').classList.toggle('off', step<4);
+  $('resPh').style.opacity = step<4 ? 1 : 0;
+  $('sceneA').classList.toggle('off', step>=5);
+  $('sceneB').classList.toggle('off', step<5);
+  $('ceil').classList.toggle('off', step<6);
+
+  const ni = $('note-int13'), na = $('note-ata');
+  if (step===4){ ni.innerHTML = '<span class="errc">H7–H4 unusable: the task file has only 4 head bits</span>';
+                 na.innerHTML = '<span class="errc">C15–C10 and S7–S6 unusable: INT 13h can never fill them</span>'; }
+  else if (step>=5){ ni.innerHTML = '<span class="okc">H7–H4 now carry low cylinder bits (translated by BIOS)</span>';
+                     na.innerHTML = '<span class="okc">C13–C0 in use: up to 16,384 physical cylinders</span>'; }
+  else { ni.innerHTML = ''; na.innerHTML = ''; }
+
+  const bb = $('biosbox');
+  if (step<5){
+    bb.className = 'biosbox';
+    bb.innerHTML = `<div class="tag">Firmware</div><div class="big">BIOS</div>
+      <span class="pill${step===4?' errp':''}">${step===4?'no translation layer':'legacy · pass-through'}</span>
+      <ul><li><span class="c">C</span> → 1F4h + 1F5h</li><li><span class="h">H</span> → 1F6h bits 3–0</li><li><span class="s">S</span> → 1F3h</li></ul>
+      <div class="foot">values copied 1 : 1</div>`;
+  } else {
+    bb.className = 'biosbox echs';
+    bb.innerHTML = `<div class="tag">Firmware</div><div class="big">BIOS</div>
+      <span class="pill okp">ECHS · translating</span>
+      <ul><li><span class="c">C</span> = C×N + ⌊H÷16⌋</li><li><span class="h">H</span> = H mod 16</li><li><span class="s">S</span> = S</li></ul>
+      <div class="foot">N = 1, 2, 4, 8 or 16</div>`;
+  }
+  $('captxt').innerHTML = STEPS[step];
+  $('stepno').textContent = `${step+1} / ${STEPS.length}`;
+  dotsEl.querySelectorAll('span').forEach((d,i)=>d.classList.toggle('on', i===step));
+  $('prev').disabled = step===0;
+  $('next').disabled = step===STEPS.length-1;
+}
+$('prev').onclick = ()=>setStep(step-1);
+$('next').onclick = ()=>setStep(step+1);
+setStep(0);
+
+/* =================== SIMULATOR =================== */
+const PRESETS = [
+  {l:'43 MB',  c:820,   h:6,  s:17},
+  {l:'341 MB', c:661,   h:16, s:63},
+  {l:'541 MB', c:1048,  h:16, s:63},
+  {l:'1.28 GB',c:2482,  h:16, s:63},
+  {l:'2.11 GB',c:4092,  h:16, s:63},
+  {l:'4.34 GB',c:8400,  h:16, s:63},
+  {l:'8.46 GB',c:16383, h:16, s:63},
+  {l:'20 GB',  c:38760, h:16, s:63},
+];
+$('presets').innerHTML = PRESETS.map((p,i)=>`<button data-i="${i}">${p.l}<small>${p.c}×${p.h}×${p.s}</small></button>`).join('');
+$('presets').querySelectorAll('button').forEach(b=>b.onclick=()=>{
+  const p = PRESETS[+b.dataset.i];
+  $('inC').value=p.c; $('inH').value=p.h; $('inS').value=p.s; readInputs();
+});
+
+const st = {C:4092, H:16, S:63, frac:0, errs:[]};
+$('inC').value=st.C; $('inH').value=st.H; $('inS').value=st.S;
+st.frac = ((1501*16+3)*63+11) / (4092*16*63);   // default target: C1501 H3 S12
+
+function readInputs(){
+  st.errs = [];
+  const spec = [
+    ['inC','C',1,65535,'Cylinders',`The task file has 16 cylinder bits (1F4h + 1F5h): at most 65,535.`],
+    ['inH','H',1,16,'Heads',`The task file has only 4 head bits (1F6h): at most 16 heads.`],
+    ['inS','S',1,255,'Sectors',`The task file has 8 sector bits (1F3h): 1–255.`],
+  ];
+  for (const [id,key,lo,hi,name,why] of spec){
+    const el = $(id), raw = el.value.trim(), v = Math.floor(Number(raw));
+    if (raw==='' || !isFinite(v)) { el.classList.add('bad'); continue; }
+    const cl = Math.max(lo, Math.min(hi, v));
+    el.classList.toggle('bad', cl!==v);
+    if (cl!==v) st.errs.push({t:`${name}: ${nf(v)} is not a valid ATA value`, x:`${why} Using ${nf(cl)}.`});
+    st[key] = cl;
+  }
+  update();
+}
+['inC','inH','inS'].forEach(id=>$(id).addEventListener('input', readInputs));
+$('inT').addEventListener('input', e=>{ const tot=st.C*st.H*st.S; st.frac = tot>1 ? (+e.target.value)/(tot-1) : 0; update(true); });
+
+function lbaOf(c,h,s){ return (c*st.H + h)*st.S + (s-1); }
+function goLba(l){ const tot=st.C*st.H*st.S; st.frac = tot>1 ? l/(tot-1) : 0; update(); }
+$('qFirst').onclick = ()=>goLba(0);
+$('qLeg').onclick   = ()=>goLba(lbaOf(Math.min(st.C,1024)-1, st.H-1, Math.min(st.S,63)));
+$('qPast').onclick  = ()=>{ if (st.C>1024) goLba(lbaOf(1024,0,1)); };
+$('qEnd').onclick   = ()=>goLba(st.C*st.H*st.S-1);
+
+function regsHTML(defs, vals){
+  return defs.map((r,k)=>{ const v = vals[k];
+    return `<div class="sreg"><div class="sname">${r.n}</div><div class="sbits">${
+      r.b.map(([f],j)=>{ const bit=(v>>(7-j))&1; return `<div class="sbit f-${f}${bit?' one':''}">${bit}</div>`; }).join('')
+    }</div><div class="shex">${hex2(v)}</div></div>`; }).join('');
+}
+const int13Vals = (c,h,s) => [c&0xFF, ((c>>2)&0xC0)|(s&0x3F), h&0xFF];
+const ataVals   = (c,h,s) => [s&0xFF, c&0xFF, (c>>8)&0xFF, 0xA0|(h&0x0F)];
+const chsTxt = (c,h,s) => `<span class="c">C ${nf(c)}</span> · <span class="h">H ${h}</span> · <span class="s">S ${s}</span>`;
+
+function laneHTML(o){
+  const pct = Math.round(o.usable/o.drive*1000)/10;
+  const full = o.usable>=o.drive;
+  const badge = full ? `<span class="badge okb">whole drive visible</span>`
+              : `<span class="badge ${pct<50?'eb':'wb'}">${bin(o.drive-o.usable)} invisible</span>`;
+  let dos, bios, ata, drv, off='';
+  if (!o.ok){
+    off=' off';
+    dos = `<div class="ph">DOS · INT 13h</div><div class="blocked"><div class="x">✗ Can't be expressed</div>
+           <div class="why">${o.why}</div><div class="req">${o.reqTxt}</div></div>`;
+    bios = `<div class="ph">BIOS</div><div class="mode mut">never called</div>`;
+    ata = `<div class="ph">IDE · task file</div>${regsHTML(ATA,[0,0,0,0xA0])}<div class="dec mut">—</div>`;
+    drv = `<div class="ph">Drive</div><div class="big errc">✗</div><div class="lbal">sector stays out of reach</div>`;
+  } else {
+    dos = `<div class="ph">DOS · INT 13h registers</div>${regsHTML(INT13,int13Vals(o.lc,o.lh,o.ls))}<div class="dec">${chsTxt(o.lc,o.lh,o.ls)}</div>`;
+    bios = `<div class="ph">BIOS</div>${o.biosHTML}`;
+    ata = `<div class="ph">IDE · ATA task file</div>${regsHTML(ATA,ataVals(o.pc,o.ph,o.ps))}<div class="dec">${chsTxt(o.pc,o.ph,o.ps)}</div>`;
+    drv = `<div class="ph">Drive</div><div class="mut" style="font-size:17px">seeks to</div>
+           <div class="big"><span class="c">C ${nf(o.pc)}</span><br><span class="h">H ${o.ph}</span><br><span class="s">S ${o.ps}</span></div>
+           <div class="lbal">LBA ${nf(o.lba)}</div><div class="okt">✓ requested sector</div>`;
+  }
+  return `<div class="lhead">
+      <div class="ti"><b class="${o.cls}">${o.title}</b><span>${o.sub}</span></div>
+      <div class="sees"><div class="l">DOS sees</div><div class="g"><span class="c">${o.g.C}</span> × <span class="h">${o.g.H}</span> × <span class="s">${o.g.S}</span></div></div>
+      <div class="usable"><div class="u">${bin(o.usable)} <small>of ${bin(o.drive)} · ${full?100:pct}%</small></div>${badge}</div>
+    </div>
+    <div class="pipe">
+      <div class="pbox dos">${dos}</div><div class="parrow">→</div>
+      <div class="pbox bios${off}">${bios}</div><div class="parrow">→</div>
+      <div class="pbox ata${off}">${ata}</div><div class="parrow">→</div>
+      <div class="pbox drv${off}">${drv}</div>
+    </div>`;
+}
+
+function update(fromSlider){
+  const {C,H,S} = st, tot = C*H*S, drive = tot*512;
+  const lba = Math.round(st.frac*(tot-1));
+  const tC = Math.floor(lba/(H*S)), tH = Math.floor(lba/S)%H, tS = lba%S + 1;
+
+  // inputs & readouts
+  $('capV').textContent = bin(drive);
+  $('capD').textContent = `${dec(drive)} · ${nf(tot)} sectors`;
+  const sl = $('inT'); sl.max = tot-1; if (!fromSlider) sl.value = lba;
+  $('tLba').textContent = `LBA ${nf(lba)}`;
+  $('tChs').innerHTML = chsTxt(tC,tH,tS);
+  $('tOff').textContent = `at ${bin(lba*512)}`;
+  $('qPast').disabled = C<=1024;
+  $('presets').querySelectorAll('button').forEach(b=>{ const p=PRESETS[+b.dataset.i]; b.classList.toggle('on', p.c===C&&p.h===H&&p.s===S); });
+
+  // legacy geometry
+  const lg = {C:Math.min(C,1024), H, S:Math.min(S,63)};
+  const legBytes = lg.C*lg.H*lg.S*512;
+  // ECHS geometry
+  let maxN = 1; while (H*maxN*2 <= 256) maxN *= 2;
+  let N = 1; while (C > 1024*N && N < maxN) N *= 2;
+  const eRaw = Math.floor(C/N), capped = eRaw > 1024;
+  const eg = {C:Math.min(eRaw,1024), H:H*N, S:Math.min(S,63)};
+  const echBytes = eg.C*eg.H*eg.S*512;
+  const rem = capped ? 0 : C - eRaw*N;
+
+  // trace: legacy
+  const L = {title:'Legacy BIOS', cls:'', sub:'no translation · INT 13h values go straight to the task file',
+             g:lg, usable:legBytes, drive, lba};
+  if (tS>63){ L.ok=false; L.why=`Sector ${tS} needs ${bitsFor(tS)} bits, but CL holds only 6 (max 63).`; L.reqTxt=chsTxt(tC,tH,tS); }
+  else if (tC>1023){ L.ok=false; L.why=`Cylinder ${nf(tC)} needs ${bitsFor(tC)} bits, but CH + CL hold only 10 (max 1023).`; L.reqTxt=chsTxt(tC,tH,tS); }
+  else { Object.assign(L,{ok:true,lc:tC,lh:tH,ls:tS,pc:tC,ph:tH,ps:tS,
+      biosHTML:`<div class="mode">Pass-through</div><ul>
+        <li><span class="c">C ${nf(tC)}</span> → 1F4h/5h</li><li><span class="h">H ${tH}</span> → 1F6h</li><li><span class="s">S ${tS}</span> → 1F3h</li></ul>
+        <div class="fn">values copied 1 : 1, no arithmetic</div>`}); }
+
+  // trace: ECHS
+  const lC = Math.floor(tC/N), lH = (tC%N)*H + tH;
+  const E = {title:'ECHS BIOS (“Large”)', cls:'okc',
+             sub: N>1 ? `translation factor ×${N}: cylinders ÷ ${N}, heads × ${N}` : 'factor ×1 — the drive already fits, nothing to translate',
+             g:eg, usable:echBytes, drive, lba};
+  if (tS>63){ E.ok=false; E.why=`Sector ${tS} needs ${bitsFor(tS)} bits, but CL holds only 6 (max 63). ECHS doesn't touch sectors.`; E.reqTxt=chsTxt(lC,lH,tS); }
+  else if (lC>1023){ E.ok=false; E.why=`Even after ÷${N}, cylinder ${nf(tC)} becomes logical cylinder ${nf(lC)} — above 1023. INT 13h is out of bits.`; E.reqTxt=chsTxt(lC,lH,tS); }
+  else if (lC>=eg.C){ E.ok=false; E.why=`Cylinder ${nf(tC)} is one of the ${rem} leftover cylinders: ${nf(C)} isn't divisible by ${N}, so they don't fill a whole logical cylinder.`; E.reqTxt=chsTxt(lC,lH,tS); }
+  else {
+    const pc = lC*N + Math.floor(lH/H), ph = lH % H;
+    Object.assign(E,{ok:true,lc:lC,lh:lH,ls:tS,pc,ph,ps:tS,
+      biosHTML: N>1 ? `<div class="mode okc">Translate ×${N}</div><ul>
+        <li><span class="c">C</span> = ${nf(lC)}×${N} + ⌊${lH}÷${H}⌋</li><li class="c">&nbsp;&nbsp;= ${nf(pc)}</li>
+        <li><span class="h">H</span> = ${lH} mod ${H} = ${ph}</li><li><span class="s">S</span> = ${tS}</li></ul>`
+      : `<div class="mode okc">Factor ×1</div><ul><li><span class="c">C ${nf(pc)}</span> → 1F4h/5h</li><li><span class="h">H ${ph}</span> → 1F6h</li><li><span class="s">S ${tS}</span> → 1F3h</li></ul>
+         <div class="fn">≤ 1024 cylinders: nothing to translate</div>`});
+  }
+
+  $('laneL').innerHTML = laneHTML(L);
+  $('laneE').innerHTML = laneHTML(E);
+
+  // reach map
+  const fL = lg.C/C, fE = (eg.C*N)/C;
+  $('fillL').style.width = (fL*100)+'%';
+  $('fillE').style.width = (fE*100)+'%';
+  $('tvL').textContent = `${bin(legBytes)} · ${Math.round(legBytes/drive*1000)/10}%`;
+  $('tvE').textContent = `${bin(echBytes)} · ${Math.round(echBytes/drive*1000)/10}%`;
+  $('marker').style.left = (166 + (tot>1 ? lba/(tot-1) : 0)*1300 - 1.5)+'px';   // 150px label + 16px gap, 1300px track
+
+  // warnings
+  const W = st.errs.map(e=>({k:'e',...e}));
+  if (drive > legBytes && C > 1024)
+    W.push({k:'w', t:'Too big for a BIOS without translation',
+      x:`${nf(C)} cylinders don't fit in INT 13h's 10 bits. DOS sees only ${bin(legBytes)} of ${bin(drive)} — the rest needs ECHS.`});
+  if (S > 63)
+    W.push({k:'w', t:`${S} sectors/track: too many for INT 13h`,
+      x:`CL has only 6 sector bits, so sectors 64–${S} of every track are unreachable in CHS. Real drives report 63 for this reason.`});
+  if (capped)
+    W.push({k:'e', t:'Too big for standard CHS — even with ECHS',
+      x:`INT 13h tops out at 1024 × 256 × 63 = 7.88 GiB. ${bin(drive-echBytes)} stay invisible. Needs LBA + INT 13h Extensions.`});
+  else if (rem > 0)
+    W.push({k:'i', t:`ECHS drops ${rem} leftover cylinder${rem>1?'s':''}`,
+      x:`${nf(C)} isn't divisible by ${N}; the remainder can't form a whole logical cylinder (${bin(rem*H*S*512)} lost).`});
+  if (eg.H >= 256)
+    W.push({k:'i', t:'256 logical heads',
+      x:`MS-DOS and Windows 9x crash with 256 heads (DH = 0 wraps). Real BIOSes reported ≤ 255 — often 240 via “revised ECHS”.`});
+  if (!W.some(w=>w.k!=='i') && drive <= legBytes)
+    W.unshift({k:'o', t:'Fits everywhere', x:`At ${bin(drive)} this drive is below 504 MiB: any BIOS can address all of it, no translation needed.`});
+  const icon = {e:'!', w:'!', i:'i', o:'✓'};
+  const pr = {e:0,w:1,i:2,o:3}; W.sort((a,b)=>pr[a.k]-pr[b.k]);
+  $('warns').innerHTML = W.slice(0,4).map(w=>`<div class="warn ${w.k}"><div class="ic">${icon[w.k]}</div><div><div class="wt">${w.t}</div><div class="wx">${w.x}</div></div></div>`).join('');
+}
+readInputs();
+
+/* ---------- keyboard ---------- */
+addEventListener('keydown', e=>{
+  if (e.target.tagName==='INPUT' && e.target.type==='number') return;
+  if (e.key==='1') showTab('explain');
+  else if (e.key==='2') showTab('sim');
+  else if (e.key==='f' || e.key==='F'){ if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen?.(); }
+  else if ($('explain').classList.contains('on')){
+    if (['ArrowRight','PageDown',' '].includes(e.key)){ e.preventDefault(); setStep(step+1); }
+    if (['ArrowLeft','PageUp'].includes(e.key)){ e.preventDefault(); setStep(step-1); }
+  }
+});
+})();
+</script>
+</body>
+</html>

@@ -6,6 +6,12 @@ ceiling to the INT 13h CHS ceiling of 7.84 GiB (8.42 GB), with no LBA support an
 no extra ROM space. Verified on real hardware: an 8 GB CF card
 (16000/16/63) partitioned, formatted, booted from, and benchmarked.
 
+> **Scope.** This guide covers the ECHS (CHS translation) patch. Going
+> past 8.4 GB with LBA (INT 13h extensions), replacing the POST screen or
+> the setup program, and reclaiming ROM space are covered in
+> [`BIOS_MODDING_GUIDE.md`](BIOS_MODDING_GUIDE.md), which builds on this one.
+> Paths are relative to the repository root.
+
 Every BIOS is different, but the *structure* of the problem is always the
 same. This guide is organised as: the theory, then how to find the parts
 in an unknown ROM, then what to write, then how to prove it works, then a
@@ -80,7 +86,8 @@ not a power of two, compute the logical cylinder count as
 32/16 `DIV` — the quotient always fits, so no 32-bit registers are needed).
 
 Ceiling with this rule: 1024 x 255 x 63 x 512 = **7.84 GiB** (8.42 GB). Going beyond
-that requires INT 13h extensions (AH=41h/42h), i.e. a different project.
+that requires the INT 13h extensions (AH=41h/42h); see
+[`BIOS_MODDING_GUIDE.md`](BIOS_MODDING_GUIDE.md) §6.
 
 Keep whatever "-1" / "-2" convention the original AH=08h code used when
 reporting the maximum cylinder index, so reported capacity stays
@@ -408,7 +415,9 @@ drive rarely does.
 ## 11. Limits of this approach
 
 - Ceiling is 1024 x 255 x 63 x 512 = **7.84 GiB** (8.42 GB). Beyond that needs INT
-  13h extensions (AH=41h/42h) and an OS that uses them.
+  13h extensions (AH=41h/42h) and an OS that uses them. BUBios adds them to
+  this ROM (EDD 1.1, 28-bit LBA, up to 128 GB); see
+  [`BIOS_MODDING_GUIDE.md`](BIOS_MODDING_GUIDE.md) §6.
 - FAT16 caps a partition at 2 GB; use multiple partitions, or a DOS with
   FAT32 (MS-DOS 7.1 / Win9x) as we did for the 8 GB card.
 - Some ROMs also carry a boot-sector write-protection ("virus warning")

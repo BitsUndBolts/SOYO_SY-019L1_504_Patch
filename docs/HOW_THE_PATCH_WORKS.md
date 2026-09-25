@@ -1,9 +1,14 @@
-# How the Patch Works
+# How the ECHS Patch Works
 
 A walk-through of every byte that differs between the original ROM
-(`binary/SY019L1_27C512_ORIGINAL.BIN`) and the patched ROM
+(`binary/SY019L1_27C512_ORIGINAL.BIN`) and the ECHS-patched ROM
 (`binary/SY019L1_27C512_CHSPATCH.BIN`). Offsets are file offsets, which
-equal offsets in segment `F000`.
+equal offsets in segment `F000`. Paths are relative to the repository
+root.
+
+BUBios is built on top of this ROM and leaves all of these bytes
+unchanged; its own changes are described in
+[`BUBios/README.md`](../BUBios/README.md).
 
 | Offset | Size | Change |
 |---|---|---|
@@ -171,6 +176,8 @@ POST verifies that the 16-bit word sum of the whole 64 KB ROM is zero.
 ---
 
 ## 5. Reproducing the build and tests
+
+Run from the repository root:
 
 ```sh
 python3 py/build.py        # rebuilds the ROM, checks the MD5

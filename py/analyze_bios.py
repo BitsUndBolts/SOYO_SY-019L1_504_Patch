@@ -2,7 +2,7 @@
 """
 SOYO SY-019L1 (AMI 386/486) BIOS analysis helper.
 
-Regenerates the ROM-structure findings in BIOS_ADDRESS_MAP.md directly from
+Regenerates the ROM-structure findings in docs/BIOS_ADDRESS_MAP.md directly from
 a ROM image, so they can be re-verified (or re-run against a different AMI
 ROM of the same generation) without re-doing the manual reverse-engineering.
 
@@ -81,7 +81,7 @@ def find_int13_call_sites(b):
     print("  NOTE: these are the BIOS calling *itself* (e.g. boot loader, drive")
     print("  auto-detect). The hard-disk INT 13h handler itself is entered at")
     print("  F000:A3E7 (installed in the IVT at 0000:004C during POST); its")
-    print("  AH-dispatch table is at F000:A44B (see BIOS_ADDRESS_MAP.md).")
+    print("  AH-dispatch table is at F000:A44B (see docs/BIOS_ADDRESS_MAP.md).")
     offs = [m.start() for m in re.finditer(b'\xcd\x13', b)]
     for o in offs:
         print(f"    0x{o:04X}")

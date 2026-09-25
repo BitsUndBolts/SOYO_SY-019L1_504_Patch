@@ -5,7 +5,7 @@ For each simulated drive geometry:
   * AH=08h must report the expected translated geometry, DL = 1 drive,
     AL = sectors/track and CF = 0. The expected values are pinned on
     purpose: changing them would make existing partitions unreadable
-    (see Project_Overview.md, section 6).
+    (see Project_Overview.md, "Rules for changing the code").
   * 44 AH=02h reads (corners + random) must hit exactly the LBA the
     logical CHS implies, never beyond the end of the disk, and must
     return CX/DX (including the upper 32-bit halves) unchanged.
